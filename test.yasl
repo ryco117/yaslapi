@@ -1,0 +1,2 @@
+# just print out the variable `answer`, which was declared and initialized through the API.
+echo "The variable 'answer' has value #{answer}", rust_print()
