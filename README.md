@@ -1,9 +1,8 @@
 # yaslapi
-
-yaslapi is a Rust library that provides safe bindings to the [Yet Another Scripting Language (YASL)](https://github.com/yasl-lang/yasl) API.
+yaslapi is a Rust library that provides safe idiomatic wrapper for the [Yet Another Scripting Language (YASL)](https://github.com/yasl-lang/yasl) API.
 
 ## Installation
-
+First, you must have CMake and a C compiler installed so that YASL can be compiled locally.
 To install yaslapi, add the following to your `Cargo.toml` file:
 
 ```toml
