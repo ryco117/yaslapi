@@ -1,3 +1,4 @@
+use rustyline::{error::ReadlineError, DefaultEditor};
 use yaslapi::State;
 
 // C-style function to quit from the REPL.
@@ -16,21 +17,36 @@ fn main() {
     state.push_cfunction(repl_quit, 0);
     state.init_global("quit");
 
+    // Create a new single line editor.
+    let mut reader = DefaultEditor::new().expect("Could not allocate a default line editor.");
+
     // Run the REPL.
     loop {
-        use std::io::Write;
         // Console prompt.
-        print!("yasl> ");
-        std::io::stdout().flush().expect("Unable to flush to stdout.");
+        match reader.readline("yasl> ") {
+            Ok(mut line) => {
+                // Append to the history.
+                let _ = reader.add_history_entry(line.as_str());
 
-        //Read a line of input from stdin.
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
+                // Append a newline character.
+                line.push('\n');
 
-        // Recreate the execution state from the input.
-        state.reset_from_source(&input);
+                // Recreate the execution state from the input.
+                state.reset_from_source(&line);
 
-        // Execute the REPL.
-        state.execute_repl();
+                // Execute the REPL.
+                state.execute_repl();
+            }
+            Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => {
+                println!("Quit signal received.");
+
+                // Exit the REPL.
+                break;
+            }
+            Err(err) => {
+                // Print the error.
+                println!("Error: {err:?}");
+            }
+        }
     }
 }
