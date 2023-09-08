@@ -20,26 +20,26 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use yaslapi::{Error, State};
+use yaslapi::{State, StateResult};
 use yaslapi_sys::YASL_State;
 
 // C-style function to print a constant string.
 #[no_mangle]
 unsafe extern "C" fn rust_print(_state: *mut YASL_State) -> i32 {
     println!("This is a test");
-    yaslapi::Error::Success.into()
+    StateResult::Success.into()
 }
 
 // Given a new YASL `State`, compile and execute immediately.
 fn execute_state(state: &mut State) {
     // Execute the state machine.
-    assert_eq!(state.execute(), Error::Success);
+    assert!(state.execute().success());
 }
 
 // Given a new YASL `State`, only compile.
 fn compile_state(state: &mut State) {
     // Execute the state machine.
-    assert_eq!(state.compile(), Error::Success);
+    assert!(state.compile().success());
 }
 
 // Given a new YASL `State`, do some basic tests.
@@ -64,8 +64,8 @@ fn test_core_functionality(state: &mut State, test_fn: &dyn Fn(&mut State) -> ()
 // Test core functionality from script.
 #[test]
 fn test_core_functionality_from_script() {
-    test_core_functionality(&mut State::from_script("tests/test.yasl"), &compile_state);
-    test_core_functionality(&mut State::from_script("tests/test.yasl"), &execute_state);
+    test_core_functionality(&mut State::from_path("tests/test.yasl"), &compile_state);
+    test_core_functionality(&mut State::from_path("tests/test.yasl"), &execute_state);
 }
 
 // Test core functionality from source string.
@@ -74,4 +74,39 @@ fn test_core_functionality_from_source() {
     let source_str = include_str!("test.yasl");
     test_core_functionality(&mut State::from_source(source_str), &compile_state);
     test_core_functionality(&mut State::from_source(source_str), &execute_state);
+}
+
+// Test mutability of the globals' state.
+#[test]
+fn test_global_mutability() {
+    const NAME: &str = "x";
+    const DEFAULT: i64 = 0;
+
+    // Create a new state machine to increment a glabal variable `x`.
+    let mut state = State::from_source("x += 1;");
+
+    // Declare and initialize the global variable.
+    state.push_int(DEFAULT);
+    state.init_global(NAME);
+
+    // Ensure that the initial value is correct.
+    state.load_global(NAME);
+    assert_eq!(state.pop_int(), DEFAULT);
+
+    // Execute the state machine a single time.
+    state.execute();
+
+    // Ensure the global has increased.
+    state.load_global(NAME);
+    let new_value = state.pop_int();
+    assert_eq!(new_value, DEFAULT + 1);
+
+    // Execute the state machine three more times.
+    state.execute();
+    state.execute();
+    state.execute();
+
+    // Ensure the global has accrued the correct value.
+    state.load_global(NAME);
+    assert_eq!(state.pop_int(), new_value + 3);
 }

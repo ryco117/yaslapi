@@ -40,7 +40,7 @@ pub type CFunction = unsafe extern "C" fn(*mut YASL_State) -> i32;
 #[allow(clippy::cast_possible_wrap)]
 #[derive(Debug, FromPrimitive, PartialEq)]
 #[repr(u32)]
-pub enum Error {
+pub enum StateResult {
     /// Successful execution.
     Success = yaslapi_sys::YASL_Error_YASL_SUCCESS,
     /// Successfully executed as module.
@@ -96,7 +96,7 @@ impl State {
     /// Initialize a new YASL `State` from a script's filepath.
     #[allow(clippy::missing_panics_doc)]
     #[must_use]
-    pub fn from_script(script_location: &str) -> Self {
+    pub fn from_path(script_location: &str) -> Self {
         let script_location = CString::new(script_location).unwrap();
         Self::new(unsafe { yaslapi_sys::YASL_newstate(script_location.as_ptr()) })
     }
@@ -119,12 +119,13 @@ impl State {
 
     /// Compiles the source for the given YASL `State`, but doesn't run it.
     /// Generally you should use `execute` instead.
-    pub fn compile(&mut self) -> Error {
+    pub fn compile(&mut self) -> StateResult {
         unsafe { yaslapi_sys::YASL_compile(self.state) }.into()
     }
 
     /// Add a new global variable to the state with default value `undef`.
-    #[allow(clippy::missing_panics_doc)]
+    /// # Panics
+    /// The argument `name` must not contain internal zero bytes.
     pub fn declare_global(&mut self, name: &str) -> i32 {
         let var_name = CString::new(name).unwrap();
 
@@ -166,9 +167,38 @@ impl State {
         unsafe { yaslapi_sys::YASL_decllib_mt(self.state) }
     }
 
-    /// Duplicate the top of the stack.
-    pub fn clone_top(&mut self) -> Error {
+    /// Duplicate the top item on the stack and push it to the stack.
+    pub fn clone_top(&mut self) -> StateResult {
         unsafe { yaslapi_sys::YASL_duptop(self.state) }.into()
+    }
+
+    /// Execute the state's bytecode.
+    pub fn execute(&mut self) -> StateResult {
+        unsafe { yaslapi_sys::YASL_execute(self.state) }.into()
+    }
+
+    /// Execute the state's bytecode in REPL mode. The only difference
+    /// between `execute_repl` and `execute` is that `execute_repl` will
+    /// print the last statement passed to it if that statement is an expression.
+    pub fn execute_repl(&mut self) -> StateResult {
+        unsafe { yaslapi_sys::YASL_execute_REPL(self.state) }.into()
+    }
+
+    /// Calls a function with `n` parameters. The function must be located below all `n`
+    /// parameters it will be called with. The left-most parameter is placed directly above
+    /// the function, the right-most paramter at the top of the stack.
+    /// # Panics
+    /// The argument count `n` must be able to safely convert into a non-negative C signed integer.
+    pub fn function_call(&mut self, n: usize) -> StateResult {
+        unsafe {
+            yaslapi_sys::YASL_functioncall(
+                self.state,
+                n.try_into().expect(
+                    "The input argument count cannout be safely converted to a C signed integer.",
+                ),
+            )
+        }
+        .into()
     }
 
     /// Checks if the top of the stack is a bool.
@@ -327,7 +357,7 @@ impl State {
     /// If `n` is negative it indexes from the end of the list.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a 64-bit signed integer.
-    pub fn list_get(&mut self, n: isize) -> Error {
+    pub fn list_get(&mut self, n: isize) -> StateResult {
         unsafe {
             yaslapi_sys::YASL_listget(
                 self.state,
@@ -339,21 +369,29 @@ impl State {
     }
 
     /// Pops the top of the stack and appends it to a list (which should be located directly below the top of the stack).
-    pub fn list_push(&mut self) -> Error {
+    pub fn list_push(&mut self) -> StateResult {
         unsafe { yaslapi_sys::YASL_listpush(self.state) }.into()
     }
 
     /// Loads the specified global from state and pushes it to the stack.
-    pub fn load_global(&mut self, name: &str) -> Error {
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
+    pub fn load_global(&mut self, name: &str) -> StateResult {
         let name = CString::new(name).unwrap();
         unsafe { yaslapi_sys::YASL_loadglobal(self.state, name.as_ptr()) }.into()
     }
 
     /// Loads a metatable by name.
-    pub fn load_metatable(&mut self, name: &str) -> Error {
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
+    pub fn load_mt(&mut self, name: &str) -> StateResult {
         let name = CString::new(name).unwrap();
         unsafe { yaslapi_sys::YASL_loadmt(self.state, name.as_ptr()) }.into()
     }
+
+    // TODO: Determine if these should be added.
+    // YASL_loadprintout(struct YASL_State *S);
+    // YASL_loadprinterr(struct YASL_State *S);
 
     /// Returns the boolean value of the top of the stack, if it is a bool.
     /// Otherwise, returns false.
@@ -481,7 +519,7 @@ impl State {
             ))
         }
         .to_str()
-        .expect("YASL internal error: YASL_peektypename returned invalid UTF-8")
+        .expect("YASL internal error: YASL_peekntypename returned invalid UTF-8")
     }
 
     /// TODO: Document.
@@ -497,13 +535,21 @@ impl State {
     pub fn pop_bool(&mut self) -> bool {
         unsafe { yaslapi_sys::YASL_popbool(self.state) }
     }
-    /// Returns the str value (nul-terminated) of the top of the stack, if the top of the stack is a str.
-    pub fn pop_cstr(&mut self) -> Option<*mut ::std::os::raw::c_char> {
-        let ptr = unsafe { yaslapi_sys::YASL_popcstr(self.state) };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
+    /// Returns the string value of the top of the stack, if the top of the stack is a string.
+    /// # Panics
+    /// The popped string must contain valid UTF-8.
+    pub fn pop_str(&mut self) -> Option<&str> {
+        unsafe {
+            let ptr = yaslapi_sys::YASL_popcstr(self.state);
+            if ptr.is_null() {
+                None
+            } else {
+                Some(
+                    CStr::from_ptr(ptr)
+                        .to_str()
+                        .expect("Data was popped at a C-string but contained invalid UTF-8."),
+                )
+            }
         }
     }
     /// Returns the float value at the top of the stack, if the top of the stack is a float. Otherwise returns 0.0. Removes the top of the stack.
@@ -555,21 +601,21 @@ impl State {
     pub fn push_int(&mut self, i: i64) {
         unsafe { yaslapi_sys::YASL_pushint(self.state, i) }
     }
-    /// Pushes a bytes-buffer onto the stack. YASL makes a copy of the given data, and manages the memory for it. The buffer may have embedded zeroes.
-    pub fn push_buffer(&mut self, string: &[i8]) {
-        unsafe { yaslapi_sys::YASL_pushlstr(self.state, string.as_ptr(), string.len()) }
-    }
     /// Pushes an empty list onto the stack.
     pub fn push_list(&mut self) {
         unsafe { yaslapi_sys::YASL_pushlist(self.state) }
     }
     /// Pushes a nul-terminated string onto the stack. This memory will not be managed by YASL and must outlive the state.
-    pub fn push_literal(&mut self, string: &'static str) {
+    pub fn push_literal(&mut self, string: &'static CStr) {
         unsafe { yaslapi_sys::YASL_pushlit(self.state, string.as_ptr().cast()) }
     }
     /// Pushes an empty table onto the stack.
     pub fn push_table(&mut self) {
         unsafe { yaslapi_sys::YASL_pushtable(self.state) }
+    }
+    /// Pushes a string onto the stack. YASL makes a copy of the given string, and manages the memory for it.
+    pub fn push_str(&mut self, string: &str) {
+        unsafe { yaslapi_sys::YASL_pushlstr(self.state, string.as_ptr().cast(), string.len()) }
     }
     /// Pushes an undef value onto the stack.
     pub fn push_undef(&mut self) {
@@ -595,55 +641,53 @@ impl State {
         unsafe { yaslapi_sys::YASL_pushuserptr(self.state, userpointer) }
     }
     /// Pushes a nul-terminated string onto the stack. YASL makes a copy of the given string, and manages the memory for it.
-    pub fn push_zstr(&mut self, cstring: &CString) {
+    pub fn push_zstr(&mut self, cstring: &CStr) {
         unsafe { yaslapi_sys::YASL_pushzstr(self.state, cstring.as_ptr()) }
     }
 
-    /// Execute the state's bytecode.
-    //#[allow(clippy::missing_panics_doc)]
-    pub fn execute(&mut self) -> Error {
-        unsafe { yaslapi_sys::YASL_execute(self.state) }.into()
-    }
-
-    /// Execute the state's bytecode in REPL mode. The only difference
-    /// between `execute_repl` and `execute` is that `execute_repl` will
-    /// print the last statement passed to it if that statement is an expression.
-    pub fn execute_repl(&mut self) -> Error {
-        unsafe { yaslapi_sys::YASL_execute_REPL(self.state) }.into()
-    }
-
-    /// Calls a function with `n` parameters. The function must be located below all `n`
-    /// parameters it will be called with. The left-most parameter is placed directly above
-    /// the function, the right-most paramter at the top of the stack.
+    /// Registers a metatable with name `name`. After this returns, the
+    /// metatable can be referred to by `name` in other functions dealing
+    /// with metatables, e.g. `set_mt(..)` and `load_mt(..)`.
     /// # Panics
-    /// The argument count `n` must be able to safely convert into a non-negative C signed integer.
-    pub fn function_call(&mut self, n: usize) -> Error {
-        unsafe {
-            yaslapi_sys::YASL_functioncall(
-                self.state,
-                n.try_into().expect(
-                    "The input argument count cannout be safely converted to a C signed integer.",
-                ),
-            )
-        }
-        .into()
+    /// The string slice `name` must not contain internal zero bytes.
+    pub fn register_mt(&mut self, name: &str) -> StateResult {
+        let name = CString::new(name).unwrap();
+        unsafe { yaslapi_sys::YASL_registermt(self.state, name.as_ptr()) }.into()
     }
 
     /// Recreate the state machine from the given script path.
-    pub fn reset_from_script(&mut self, script_location: &str) -> Error {
+    /// # Panics
+    /// The string slice `script_location` must not contain internal zero bytes.
+    pub fn reset_from_script(&mut self, script_location: &str) -> StateResult {
         let script_location = CString::new(script_location).unwrap();
         unsafe { yaslapi_sys::YASL_resetstate(self.state, script_location.as_ptr()) }.into()
     }
     /// Recreate the state machine from the given source code.
-    pub fn reset_from_source(&mut self, source: &str) -> Error {
+    pub fn reset_from_source(&mut self, source: &str) -> StateResult {
         unsafe { yaslapi_sys::YASL_resetstate_bb(self.state, source.as_ptr().cast(), source.len()) }
             .into()
     }
 
     /// Pops the top of the YASL stack and stores it in the given global.
-    pub fn set_global(&mut self, name: &str) -> Error {
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
+    pub fn set_global(&mut self, name: &str) -> StateResult {
         let name = CString::new(name).unwrap();
         unsafe { yaslapi_sys::YASL_setglobal(self.state, name.as_ptr()) }.into()
+    }
+
+    // TODO: Learn what the exact API here is.
+    pub fn set_mt(&mut self) -> StateResult {
+        unsafe { yaslapi_sys::YASL_setmt(self.state) }.into()
+    }
+
+    // TODO: Learn if these should be added.
+    // void YASL_setprintout_tostr(struct YASL_State *S);
+    // void YASL_setprinterr_tostr(struct YASL_State *S);
+
+    // TODO: Learn what the exact API here is.
+    pub fn stringify_top(&mut self) {
+        unsafe { yaslapi_sys::YASL_stringifytop(self.state) }
     }
 
     /// Iterates over a table. The top-most item of the stack should be the previous index in
@@ -656,8 +700,22 @@ impl State {
 
     /// Inserts a key-value pair into the table. The top-most items are the value, then key,
     /// then table. The key and value are popped from the stack.
-    pub fn table_set(&mut self) -> Error {
+    pub fn table_set(&mut self) -> StateResult {
         unsafe { yaslapi_sys::YASL_tableset(self.state) }.into()
+    }
+
+    /// Causes a fatal error.
+    /// # Panics
+    /// The argument `error` must be able to safely convert into a C signed integer.
+    pub fn throw_err(&self, error: isize) -> ! {
+        unsafe {
+            yaslapi_sys::YASL_throw_err(
+                self.state,
+                error
+                    .try_into()
+                    .expect("Error ID must be able to safely convert into a C signed integer."),
+            )
+        }
     }
 }
 
@@ -672,12 +730,15 @@ impl Default for State {
 impl Drop for State {
     fn drop(&mut self) {
         let r = unsafe { yaslapi_sys::YASL_delstate(self.state) };
-        assert_eq!(Error::Success, num::FromPrimitive::from_i32(r).unwrap());
+        assert_eq!(
+            StateResult::Success,
+            num::FromPrimitive::from_i32(r).unwrap()
+        );
     }
 }
 
 /// Safely convert from an integer to a YASL `Error`.
-impl From<i32> for Error {
+impl From<i32> for StateResult {
     fn from(e: i32) -> Self {
         match num::FromPrimitive::from_i32(e) {
             Some(r) => r,
@@ -687,9 +748,27 @@ impl From<i32> for Error {
 }
 
 /// Convert from a YASL `Error` to the underlying integer.
-impl From<Error> for i32 {
-    fn from(e: Error) -> Self {
+impl From<StateResult> for i32 {
+    fn from(e: StateResult) -> Self {
         e as Self
+    }
+}
+
+/// Convert from a YASL `Error` to the underlying integer.
+impl From<StateResult> for bool {
+    fn from(e: StateResult) -> Self {
+        e.success()
+    }
+}
+
+impl StateResult {
+    /// Helper for determining if the result is a success.
+    pub fn success(&self) -> bool {
+        matches!(self, StateResult::Success | StateResult::ModuleSuccess)
+    }
+    /// Helper for determining if the result is a failure.
+    pub fn failure(&self) -> bool {
+        !self.success()
     }
 }
 

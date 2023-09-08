@@ -23,9 +23,14 @@
 use std::ffi::CString;
 
 use super::yaslapi_sys;
-use super::State;
+use super::{State, StateResult};
 
 impl State {
+    /// Loads all standard libraries into the state and declares them with their default names.
+    pub fn declare_libs(&mut self) -> StateResult {
+        unsafe { yaslapi_sys::YASLX_decllibs(self.state) }.into()
+    }
+
     /// Initializes a global variable with the given name and initializes it with the top of the stack.
     #[allow(clippy::missing_panics_doc)]
     pub fn init_global(&mut self, name: &str) {
@@ -37,10 +42,5 @@ impl State {
         let name_pointer = var_name.as_ptr();
         self.global_ids.insert(var_name);
         unsafe { yaslapi_sys::YASLX_initglobal(self.state, name_pointer) }
-    }
-
-    /// Loads all standard libraries into the state and declares them with their default names.
-    pub fn declare_libs(&mut self) -> i32 {
-        unsafe { yaslapi_sys::YASLX_decllibs(self.state) }
     }
 }
