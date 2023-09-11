@@ -34,7 +34,7 @@ mod aux;
 use yaslapi_sys::YASL_State;
 
 /// Type for a C-style function that can be called from YASL.
-pub type CFunction = unsafe extern "C" fn(*mut YASL_State) -> i32;
+pub type CFunction = unsafe extern "C" fn(*mut YASL_State) -> std::os::raw::c_int;
 
 /// Define the success and error results that a YASL operation may return.
 #[allow(clippy::cast_possible_wrap)]
@@ -89,7 +89,7 @@ pub enum Type {
 /// Wrapper for the YASL state.
 pub struct State {
     state: *mut YASL_State,
-    global_ids: HashSet<CString>,
+    lifetime_cstrings: HashSet<CString>,
 }
 
 impl State {
@@ -113,7 +113,7 @@ impl State {
         assert!(!state.is_null());
         Self {
             state,
-            global_ids: HashSet::new(),
+            lifetime_cstrings: HashSet::new(),
         }
     }
 
@@ -130,10 +130,10 @@ impl State {
         let var_name = CString::new(name).unwrap();
 
         // Pointer `name_pointer` would be invalid if this id already exists.
-        assert!(!self.global_ids.contains(&var_name));
+        assert!(!self.lifetime_cstrings.contains(&var_name));
 
         let name_pointer = var_name.as_ptr();
-        self.global_ids.insert(var_name);
+        self.lifetime_cstrings.insert(var_name);
 
         unsafe { yaslapi_sys::YASL_declglobal(self.state, name_pointer) }
     }
@@ -380,12 +380,20 @@ impl State {
         let name = CString::new(name).unwrap();
         unsafe { yaslapi_sys::YASL_loadglobal(self.state, name.as_ptr()) }.into()
     }
+    /// Loads the specified global from state and pushes it to the stack.
+    pub fn load_global_cstr(&mut self, name: &CStr) -> StateResult {
+        unsafe { yaslapi_sys::YASL_loadglobal(self.state, name.as_ptr()) }.into()
+    }
 
     /// Loads a metatable by name.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
     pub fn load_mt(&mut self, name: &str) -> StateResult {
         let name = CString::new(name).unwrap();
+        unsafe { yaslapi_sys::YASL_loadmt(self.state, name.as_ptr()) }.into()
+    }
+    /// Loads a metatable by name.
+    pub fn load_mt_cstr(&mut self, name: &CStr) -> StateResult {
         unsafe { yaslapi_sys::YASL_loadmt(self.state, name.as_ptr()) }.into()
     }
 
@@ -398,15 +406,21 @@ impl State {
     pub fn peek_bool(&self) -> bool {
         unsafe { yaslapi_sys::YASL_peekbool(self.state) }
     }
-    /// Returns the C-string value of the top of the stack, if the top of the stack is a C-string.
+    /// Returns the string value of the top of the stack, if the top of the stack is a string.
     /// Otherwise, returns `None`.
-    pub fn peek_cstr(&self) -> Option<&str> {
+    /// # Panics
+    /// The viewed string must contain valid UTF-8.
+    pub fn peek_str(&self) -> Option<String> {
         unsafe {
             let ptr = yaslapi_sys::YASL_peekcstr(self.state);
             if ptr.is_null() {
                 None
             } else {
-                CStr::from_ptr(ptr).to_str().ok()
+                Some(
+                    CString::from_raw(ptr)
+                        .into_string()
+                        .expect("Peeked string is not valid UTF-8"),
+                )
             }
         }
     }
@@ -421,7 +435,7 @@ impl State {
         unsafe { yaslapi_sys::YASL_peekint(self.state) }
     }
     /// Returns the userdata value of the top of the stack, if the top of the stack is a userdata.
-    pub fn peek_userdata(&self) -> Option<*mut ::std::os::raw::c_void> {
+    pub fn peek_userdata(&self) -> Option<*mut std::os::raw::c_void> {
         let ptr = unsafe { yaslapi_sys::YASL_peekuserdata(self.state) };
         if ptr.is_null() {
             None
@@ -430,7 +444,7 @@ impl State {
         }
     }
     /// Returns the userptr value of the top of the stack, if the top of the stack is a userptr.
-    pub fn peek_userptr(&self) -> Option<*mut ::std::os::raw::c_void> {
+    pub fn peek_userptr(&self) -> Option<*mut std::os::raw::c_void> {
         let ptr = unsafe { yaslapi_sys::YASL_peekuserptr(self.state) };
         if ptr.is_null() {
             None
@@ -493,7 +507,7 @@ impl State {
     /// Otherwise returns `None`.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a C unsigned integer.
-    pub fn peek_n_userdata(&self, n: usize) -> Option<*mut ::std::os::raw::c_void> {
+    pub fn peek_n_userdata(&self, n: usize) -> Option<*mut std::os::raw::c_void> {
         let ptr = unsafe {
             yaslapi_sys::YASL_peeknuserdata(
                 self.state,
@@ -535,19 +549,20 @@ impl State {
     pub fn pop_bool(&mut self) -> bool {
         unsafe { yaslapi_sys::YASL_popbool(self.state) }
     }
-    /// Returns the string value of the top of the stack, if the top of the stack is a string.
+    /// Returns the string value of the top of the stack, if the top of the stack is a string. Otherwise returns `None`. Removes the top of the stack.
     /// # Panics
     /// The popped string must contain valid UTF-8.
-    pub fn pop_str(&mut self) -> Option<&str> {
+    pub fn pop_str(&mut self) -> Option<String> {
         unsafe {
             let ptr = yaslapi_sys::YASL_popcstr(self.state);
             if ptr.is_null() {
                 None
             } else {
                 Some(
-                    CStr::from_ptr(ptr)
-                        .to_str()
-                        .expect("Data was popped at a C-string but contained invalid UTF-8."),
+                    // TODO: Determine if it is possible to create invalid UTF-8 strings from within YASL which would crash here.
+                    CString::from_raw(ptr)
+                        .into_string()
+                        .expect("Popped string is not valid UTF-8"),
                 )
             }
         }
@@ -561,7 +576,7 @@ impl State {
         unsafe { yaslapi_sys::YASL_popint(self.state) }
     }
     /// TODO
-    pub fn pop_userdata(&mut self) -> Option<*mut ::std::os::raw::c_void> {
+    pub fn pop_userdata(&mut self) -> Option<*mut std::os::raw::c_void> {
         let ptr = unsafe { yaslapi_sys::YASL_popuserdata(self.state) };
         if ptr.is_null() {
             None
@@ -570,7 +585,7 @@ impl State {
         }
     }
     /// TODO
-    pub fn pop_userptr(&mut self) -> Option<*mut ::std::os::raw::c_void> {
+    pub fn pop_userptr(&mut self) -> Option<*mut std::os::raw::c_void> {
         let ptr = unsafe { yaslapi_sys::YASL_popuserptr(self.state) };
         if ptr.is_null() {
             None
@@ -581,7 +596,7 @@ impl State {
 
     // TODO: Rust doesn't really support variadic argument lists; more reading required.
     // Prints a runtime error. @param S the YASL_State in which the error occurred. @param fmt a format string, taking the same parameters as printf.
-    // pub fn print_err(S: *mut YASL_State, fmt: *const ::std::os::raw::c_char, ...) {
+    // pub fn print_err(S: *mut YASL_State, fmt: *const std::os::raw::c_char, ...) {
     //     unsafe { yaslapi_sys::YASL_print_err(S, fmt) }
     // }
 
@@ -617,7 +632,7 @@ impl State {
     pub fn push_str(&mut self, string: &str) {
         unsafe { yaslapi_sys::YASL_pushlstr(self.state, string.as_ptr().cast(), string.len()) }
     }
-    /// Pushes an undef value onto the stack.
+    /// Pushes an `undef` value onto the stack.
     pub fn push_undef(&mut self) {
         unsafe { yaslapi_sys::YASL_pushundef(self.state) }
     }
@@ -626,10 +641,10 @@ impl State {
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
     pub unsafe fn push_userdata(
         &mut self,
-        data: *mut ::std::os::raw::c_void,
+        data: *mut std::os::raw::c_void,
         tag: &str,
-        destructor: ::std::option::Option<
-            unsafe extern "C" fn(arg1: *mut YASL_State, arg2: *mut ::std::os::raw::c_void),
+        destructor: std::option::Option<
+            unsafe extern "C" fn(arg1: *mut YASL_State, arg2: *mut std::os::raw::c_void),
         >,
     ) {
         unsafe { yaslapi_sys::YASL_pushuserdata(self.state, data, tag.as_ptr().cast(), destructor) }
@@ -637,7 +652,7 @@ impl State {
     /// Pushes a user-pointer onto the stack.
     /// # Safety
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
-    pub unsafe fn push_userptr(&mut self, userpointer: *mut ::std::os::raw::c_void) {
+    pub unsafe fn push_userptr(&mut self, userpointer: *mut std::os::raw::c_void) {
         unsafe { yaslapi_sys::YASL_pushuserptr(self.state, userpointer) }
     }
     /// Pushes a nul-terminated string onto the stack. YASL makes a copy of the given string, and manages the memory for it.
