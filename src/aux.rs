@@ -22,7 +22,7 @@
 
 use std::ffi::CString;
 
-use crate::{yaslapi_sys, CFunction, State, StateResult, Type};
+use crate::{CFunction, State, StateError, StateSuccess, state_result, Type, yaslapi_sys};
 
 /// Helper for specifying the functions for a metatable.
 /// Each function will need an identifier, a C-style function, and the number of arguments.
@@ -35,8 +35,8 @@ pub struct MetatableFunction<'a> {
 
 impl State {
     /// Loads all standard libraries into the state and declares them with their default names.
-    pub fn declare_libs(&mut self) -> StateResult {
-        unsafe { yaslapi_sys::YASLX_decllibs(self.state) }.into()
+    pub fn declare_libs(&mut self) -> Result<StateSuccess, StateError> {
+        unsafe { state_result(yaslapi_sys::YASLX_decllibs(self.state)) }
     }
 
     /// Initializes a global variable with the given name and initializes it with the top of the stack.
@@ -97,18 +97,15 @@ impl State {
 
     /// Return the underlying value of a global variable, optionally ensuring a type, or return an error.
     /// # Errors
-    /// Will return a `StateResult::Error` if the given name is not a global variable.
-    /// Will return a `StateResult::TypeError` if the object is of a different type than what was expected.
+    /// Will return a `StateError::Generic` if the given name is not a global variable.
+    /// Will return a `StateError::TypeError` if the object is of a different type than what was expected.
     pub fn pop_global(
         &mut self,
         name: &str,
         expected_type: Option<Type>,
-    ) -> Result<Object, StateResult> {
+    ) -> Result<Object, StateError> {
         // Load the global variable onto the stack.
-        let r = self.load_global(name);
-        if r.failure() {
-            return Err(r);
-        }
+        self.load_global(name)?;
 
         // Pop the global variable off the stack and return.
         self.pop_object(expected_type)
@@ -116,14 +113,14 @@ impl State {
 
     /// Return the underlying value of the top stack object, optionally ensuring a type, or return an error.
     /// # Errors
-    /// Will return a `StateResult::TypeError` if the object is of a different type than what was expected.
-    pub fn pop_object(&mut self, expected_type: Option<Type>) -> Result<Object, StateResult> {
+    /// Will return a `StateError::TypeError` if the object is of a different type than what was expected.
+    pub fn pop_object(&mut self, expected_type: Option<Type>) -> Result<Object, StateError> {
         // Check the type on the stack.
         let stack_type = self.peek_type();
         if let Some(object_type) = expected_type {
             // If the caller expected a certain type which wasn't found, return an error.
             if stack_type != object_type {
-                return Err(StateResult::TypeError);
+                return Err(StateError::TypeError);
             }
         }
 
@@ -135,7 +132,7 @@ impl State {
             Type::Str => Ok(Object::Str(self.pop_str().unwrap_or_default())),
             Type::List => {
                 // Clone the top of the stack so it isn't consumed by `len`.
-                self.clone_top();
+                self.clone_top()?;
 
                 // Get the length of the list.
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -151,7 +148,7 @@ impl State {
                 for i in 0..n {
                     // Get the object at index `i` and push it onto the stack.
                     #[allow(clippy::cast_possible_wrap)]
-                    self.list_get(i as isize);
+                    self.list_get(i as isize)?;
 
                     // Pop the object off of the stack and push it onto the vector.
                     // NOTE: We don't forward the expected type since if the original

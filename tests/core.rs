@@ -20,26 +20,26 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use yaslapi::{State, StateResult};
+use yaslapi::{State, StateSuccess, Type};
 use yaslapi_sys::YASL_State;
 
 // C-style function to print a constant string.
 #[no_mangle]
 unsafe extern "C" fn rust_print(_state: *mut YASL_State) -> i32 {
     println!("This is a test");
-    StateResult::Success.into()
+    StateSuccess::Generic.into()
 }
 
 // Given a new YASL `State`, compile and execute immediately.
 fn execute_state(state: &mut State) {
     // Execute the state machine.
-    assert!(state.execute().success());
+    assert!(state.execute().is_ok());
 }
 
 // Given a new YASL `State`, only compile.
 fn compile_state(state: &mut State) {
     // Execute the state machine.
-    assert!(state.compile().success());
+    assert!(state.compile().is_ok());
 }
 
 // Given a new YASL `State`, do some basic tests.
@@ -52,7 +52,7 @@ fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ())
     state.push_cfunction(rust_print, 0);
 
     // Check that the top of the stack is our C function.
-    assert_eq!(state.peek_type(), yaslapi::Type::CFn);
+    assert_eq!(state.peek_type(), Type::CFn);
 
     // Init the function as a global.
     state.init_global("rust_print");
@@ -96,23 +96,31 @@ fn test_global_mutability() {
     state.init_global(NAME);
 
     // Ensure that the initial value is correct.
-    state.load_global(NAME);
+    state.load_global(NAME).expect("Failed to load the global");
     assert_eq!(state.pop_int(), DEFAULT);
 
     // Execute the state machine a single time.
-    state.execute();
+    state
+        .execute()
+        .expect("Failed to execute the state machine");
 
     // Ensure the global has increased.
-    state.load_global(NAME);
+    state.load_global(NAME).expect("");
     let new_value = state.pop_int();
     assert_eq!(new_value, DEFAULT + 1);
 
     // Execute the state machine three more times.
-    state.execute();
-    state.execute();
-    state.execute();
+    state
+        .execute()
+        .expect("Failed to execute the state machine");
+    state
+        .execute()
+        .expect("Failed to execute the state machine");
+    state
+        .execute()
+        .expect("Failed to execute the state machine");
 
     // Ensure the global has accrued the correct value.
-    state.load_global(NAME);
+    state.load_global(NAME).expect("Failed to load the global");
     assert_eq!(state.pop_int(), new_value + 3);
 }

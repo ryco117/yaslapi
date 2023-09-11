@@ -44,17 +44,19 @@ fn main() {
     // Helper function to execute source code.
     let execute_helper = |src: &str, args_compile, args_execute_print| {
         let mut state = State::from_source(&src);
-        state.declare_libs();
+        state
+            .declare_libs()
+            .expect("Could not load standard libraries.");
 
-        if args_compile {
-            state.compile();
+        let _ = if args_compile {
+            state.compile()
         } else {
             if args_execute_print {
-                state.execute_repl();
+                state.execute_repl()
             } else {
-                state.execute();
+                state.execute()
             }
-        }
+        };
     };
 
     // Check if we were given source expressions from the arguments.
@@ -68,13 +70,15 @@ fn main() {
     // Check if we were given a script location from the arguments.
     if let Some(input) = args.input {
         let mut state = State::from_path(&input).expect("Could not read file.");
-        state.declare_libs();
+        state
+            .declare_libs()
+            .expect("Could not load standard libraries.");
 
-        if args.compile {
-            state.compile();
+        let _ = if args.compile {
+            state.compile()
         } else {
-            state.execute();
-        }
+            state.execute()
+        };
         return;
     }
 
@@ -82,7 +86,9 @@ fn main() {
     let mut state = State::default();
 
     // Declare the standard library.
-    state.declare_libs();
+    state
+        .declare_libs()
+        .expect("Could not load standard libraries.");
 
     // Add a global `quit` function.
     state.push_cfunction(repl_quit, 0);
@@ -105,13 +111,13 @@ fn main() {
                 // Recreate the execution state from the input.
                 state.reset_from_source(&line);
 
-                if args.compile {
+                let _ = if args.compile {
                     // Compile the source.
-                    state.compile();
+                    state.compile()
                 } else {
                     // Execute the REPL.
-                    state.execute_repl();
-                }
+                    state.execute_repl()
+                };
             }
             Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => {
                 println!("Quit signal received.");
