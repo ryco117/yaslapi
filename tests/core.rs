@@ -43,7 +43,7 @@ fn compile_state(state: &mut State) {
 }
 
 // Given a new YASL `State`, do some basic tests.
-fn test_core_functionality(state: &mut State, test_fn: &dyn Fn(&mut State) -> ()) {
+fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ()) {
     // Init new variable `answer` with the top of the stack (in this case, the `42`).
     state.push_int(42);
     state.init_global("answer");
@@ -58,22 +58,28 @@ fn test_core_functionality(state: &mut State, test_fn: &dyn Fn(&mut State) -> ()
     state.init_global("rust_print");
 
     // Now that we're done setting things up, test the state machine.
-    test_fn(state);
+    test_fn(&mut state);
 }
 
 // Test core functionality from script.
 #[test]
 fn test_core_functionality_from_script() {
-    test_core_functionality(&mut State::from_path("tests/test.yasl"), &compile_state);
-    test_core_functionality(&mut State::from_path("tests/test.yasl"), &execute_state);
+    test_core_functionality(
+        State::from_path("tests/test.yasl").expect("Could not read the test file."),
+        &compile_state,
+    );
+    test_core_functionality(
+        State::from_path("tests/test.yasl").expect("Could not read the test file."),
+        &execute_state,
+    );
 }
 
 // Test core functionality from source string.
 #[test]
 fn test_core_functionality_from_source() {
     let source_str = include_str!("test.yasl");
-    test_core_functionality(&mut State::from_source(source_str), &compile_state);
-    test_core_functionality(&mut State::from_source(source_str), &execute_state);
+    test_core_functionality(State::from_source(source_str), &compile_state);
+    test_core_functionality(State::from_source(source_str), &execute_state);
 }
 
 // Test mutability of the globals' state.

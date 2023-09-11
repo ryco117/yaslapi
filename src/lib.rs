@@ -93,12 +93,18 @@ pub struct State {
 }
 
 impl State {
-    /// Initialize a new YASL `State` from a script's filepath.
+    /// Initialize a new YASL `State` from a script's filepath. Returns `None` if the file does not exist or cannot be read.
     #[allow(clippy::missing_panics_doc)]
     #[must_use]
-    pub fn from_path(script_location: &str) -> Self {
+    pub fn from_path(script_location: &str) -> Option<Self> {
         let script_location = CString::new(script_location).unwrap();
-        Self::new(unsafe { yaslapi_sys::YASL_newstate(script_location.as_ptr()) })
+        let ptr = unsafe { yaslapi_sys::YASL_newstate(script_location.as_ptr()) };
+
+        // Ensure that the pointer is not null before returning the final `State`.
+        if ptr.is_null() {
+            return None;
+        }
+        Some(Self::new(ptr))
     }
 
     /// Initialize a new YASL `State` from a string containing the source code.
@@ -110,7 +116,9 @@ impl State {
     /// Private helper for initializing a new YASL `State`.
     #[must_use]
     fn new(state: *mut YASL_State) -> Self {
+        #[cfg(debug_assertions)]
         assert!(!state.is_null());
+
         Self {
             state,
             lifetime_cstrings: HashSet::new(),
