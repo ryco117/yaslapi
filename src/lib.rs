@@ -20,14 +20,51 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+//! # yaslapi
+//! yaslapi is a Rust library that provides a safe idiomatic wrapper for the [Yet Another Scripting Language (YASL)](https://github.com/yasl-lang/yasl) API.
+//!
+//! Then run cargo build to build your project.
+//!
+//! ## Usage
+//! Here’s an example of how to use yaslapi in your Rust code:
+//!
+//! ```
+//! use yaslapi::{State, StateSuccess, Type};
+//!
+//! // C-style function to print a constant string.
+//! unsafe extern "C" fn rust_print(_state: *mut yaslapi_sys::YASL_State) -> i32 {
+//!     println!("This is a test");
+//!     StateSuccess::Generic.into()
+//! }
+//!
+//! fn main() {
+//!     // Initialize test script.
+//!     let mut state = State::from_source(r#"echo "The variable 'answer' has value #{answer}", rust_print();"#);
+//!
+//!     // Init new variable `answer` with the top of the stack (in this case, the `42`).
+//!     state.push_int(42);
+//!     state.init_global("answer");
+//!
+//!     // Add Rust implemented function `rust_print` to globals.
+//!     state.push_cfunction(rust_print, 0);
+//!
+//!     // Check that the top of the stack is our C function.
+//!     assert_eq!(state.peek_type(), Type::CFn);
+//!
+//!     // Init the function as a global.
+//!     state.init_global("rust_print");
+//!
+//!     // Execute `test.yasl`, now that we're done setting everything up.
+//!     assert!(state.execute().is_ok());
+//! }
+//! ```
+
 #![allow(clippy::must_use_candidate)]
 use num_derive::FromPrimitive;
 use std::{
     collections::HashSet,
-    ffi::{CStr, CString},
+    ffi::{CStr, CString}, ptr::NonNull,
 };
-
-extern crate yaslapi_sys;
 
 mod aux;
 
@@ -596,13 +633,8 @@ impl State {
         }
     }
     /// TODO
-    pub fn pop_userptr(&mut self) -> Option<*mut std::os::raw::c_void> {
-        let ptr = unsafe { yaslapi_sys::YASL_popuserptr(self.state) };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
+    pub fn pop_userptr(&mut self) -> Option<NonNull<std::os::raw::c_void>> {
+        NonNull::new(unsafe { yaslapi_sys::YASL_popuserptr(self.state) })
     }
 
     // TODO: Rust doesn't really support variadic argument lists; more reading required.

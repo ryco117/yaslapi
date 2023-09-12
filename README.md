@@ -16,15 +16,19 @@ Then run cargo build to build your project.
 Here’s an example of how to use yaslapi in your Rust code:
 
 ```rust
-extern crate yaslapi;
+use yaslapi::{State, StateSuccess, Type};
 
-use yaslapi::{State, Type};
+// C-style function to print a constant string.
+unsafe extern "C" fn rust_print(_state: *mut yaslapi_sys::YASL_State) -> i32 {
+    println!("This is a test");
+    StateSuccess::Generic.into()
+}
 
 fn main() {
-    // Initialize test script
-    let mut state = State::from_path("test.yasl");
+    // Initialize test script.
+    let mut state = State::from_source(r#"echo "The variable 'answer' has value #{answer}", rust_print();"#);
 
-    // Init new variable `answer` with the top of the stack (in this case, the `42`)
+    // Init new variable `answer` with the top of the stack (in this case, the `42`).
     state.push_int(42);
     state.init_global("answer");
 
@@ -37,7 +41,7 @@ fn main() {
     // Init the function as a global.
     state.init_global("rust_print");
 
-    // Execute `test.yasl`, now that we're done setting everything up
+    // Execute `test.yasl`, now that we're done setting everything up.
     assert!(state.execute().is_ok());
 }
 ```

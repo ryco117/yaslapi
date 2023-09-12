@@ -20,9 +20,9 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::ffi::CString;
+use std::{ffi::CString, ptr::NonNull};
 
-use crate::{CFunction, State, StateError, StateSuccess, state_result, Type, yaslapi_sys};
+use crate::{CFunction, State, StateError, StateSuccess, state_result, Type};
 
 /// Helper for specifying the functions for a metatable.
 /// Each function will need an identifier, a C-style function, and the number of arguments.
@@ -40,7 +40,7 @@ impl State {
     }
 
     /// Initializes a global variable with the given name and initializes it with the top of the stack.
-    #[allow(clippy::missing_panics_doc)] // Converting a `&str` to a `CString` can't fail.
+    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
     pub fn init_global(&mut self, name: &str) {
         let var_name = CString::new(name).unwrap();
 
@@ -57,7 +57,7 @@ impl State {
     }
 
     /// Inserts all functions in the array into a new table on top of the stack.
-    #[allow(clippy::missing_panics_doc)] // Converting a `&str` to a `CString` can't fail.
+    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
     pub fn table_set_functions(&mut self, functions: &[MetatableFunction]) {
         // Create a sentinel function to mark the end of the array.
         const SENTINEL_FUNCTION: yaslapi_sys::YASLX_function = yaslapi_sys::YASLX_function {
@@ -159,7 +159,7 @@ impl State {
             }
             //Type::Table => Ok(Object::Table(self.pop_table()?)),
             //Type::Userdata => Ok(Object::Userdata(self.pop_userdata()?)),
-            //Type::Userptr => Ok(Object::Userptr(self.pop_userptr()?)),
+            Type::UserPtr => Ok(Object::UserPtr(self.pop_userptr())),
             t => {
                 // Temporary warning for unhandled types.
                 if !matches!(t, Type::Undef) {
@@ -183,7 +183,7 @@ pub enum Object {
     List(Vec<Object>),
     //Table(Vec<(Object, Object)>),
     //Userdata(*mut yaslapi_sys::),
-    //Userptr(*mut yaslapi_sys::),
+    UserPtr(Option<NonNull<std::os::raw::c_void>>),
     Undef,
 }
 
@@ -198,7 +198,7 @@ impl From<Object> for Type {
             Object::List(_) => Type::List,
             //Object::Table(_) => Type::Table,
             //Object::Userdata(_) => Type::Userdata,
-            //Object::Userptr(_) => Type::Userptr,
+            Object::UserPtr(_) => Type::UserPtr,
             Object::Undef => Type::Undef,
         }
     }

@@ -24,7 +24,6 @@ use yaslapi::{State, StateSuccess, Type};
 use yaslapi_sys::YASL_State;
 
 // C-style function to print a constant string.
-#[no_mangle]
 unsafe extern "C" fn rust_print(_state: *mut YASL_State) -> i32 {
     println!("This is a test");
     StateSuccess::Generic.into()
