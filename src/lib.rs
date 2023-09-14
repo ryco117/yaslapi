@@ -63,7 +63,8 @@
 use num_derive::FromPrimitive;
 use std::{
     collections::HashSet,
-    ffi::{CStr, CString}, ptr::NonNull,
+    ffi::{CStr, CString},
+    ptr::NonNull,
 };
 
 mod aux;
@@ -71,7 +72,7 @@ mod aux;
 use yaslapi_sys::YASL_State;
 
 /// Type for a C-style function that can be called from YASL.
-pub type CFunction = unsafe extern "C" fn(*mut YASL_State) -> std::os::raw::c_int;
+pub type CFunction = unsafe extern "C" fn(state: *mut YASL_State) -> std::os::raw::c_int;
 
 /// Defines the success results that a YASL operation may return from the state machine.
 #[derive(Debug, FromPrimitive, PartialEq)]
@@ -136,7 +137,7 @@ pub struct State {
 
 impl State {
     /// Initialize a new YASL `State` from a script's filepath. Returns `None` if the file does not exist or cannot be read.
-    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
     #[must_use]
     pub fn from_path(script_location: &str) -> Option<Self> {
         let script_location = CString::new(script_location).unwrap();
@@ -168,7 +169,10 @@ impl State {
     }
 
     /// Compiles the source for the given YASL `State`, but doesn't run it.
+    /// Returns `StateSuccess::Generic` if the compilation was successful.
     /// Generally you should use `execute` instead.
+    /// # Errors
+    /// Will return `StateError::SyntaxError` if the source code contains invalid syntax.
     pub fn compile(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_compile(self.state)) }
     }
@@ -218,11 +222,17 @@ impl State {
     }
 
     /// Duplicate the top item on the stack and push it to the stack.
-    pub fn clone_top(&mut self) -> Result<StateSuccess, StateError> {
-        unsafe { state_result(yaslapi_sys::YASL_duptop(self.state)) }
+    pub fn clone_top(&mut self) {
+        unsafe {
+            yaslapi_sys::YASL_duptop(self.state);
+        }
     }
 
     /// Execute the state's bytecode.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// Will return `StateError::SyntaxError` if the source code contains invalid syntax.
+    /// May return runtime errors depending on the source code and execution state.
     pub fn execute(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_execute(self.state)) }
     }
@@ -230,6 +240,10 @@ impl State {
     /// Execute the state's bytecode in REPL mode. The only difference
     /// between `execute_repl` and `execute` is that `execute_repl` will
     /// print the last statement passed to it if that statement is an expression.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// Will return `StateError::SyntaxError` if the source code contains invalid syntax.
+    /// May return runtime errors depending on the source code and execution state.
     pub fn execute_repl(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_execute_REPL(self.state)) }
     }
@@ -237,16 +251,19 @@ impl State {
     /// Calls a function with `n` parameters. The function must be located below all `n`
     /// parameters it will be called with. The left-most parameter is placed directly above
     /// the function, the right-most paramter at the top of the stack.
+    /// The return value is the number of objects that were returned by the function.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a non-negative C signed integer.
-    pub fn function_call(&mut self, n: usize) -> Result<StateSuccess, StateError> {
+    pub fn function_call(&mut self, n: usize) -> usize {
+        // TODO: Remove this if YASL API is updated to use unsigned values here.
+        #[allow(clippy::cast_sign_loss)]
         unsafe {
-            state_result(yaslapi_sys::YASL_functioncall(
+            yaslapi_sys::YASL_functioncall(
                 self.state,
                 n.try_into().expect(
-                    "The input argument count cannout be safely converted to a C signed integer.",
+                    "The input argument count cannout be safely converted to a non-negative C signed integer.",
                 ),
-            ))
+            ) as usize
         }
     }
 
@@ -279,7 +296,8 @@ impl State {
         unsafe { yaslapi_sys::YASL_isundef(self.state) }
     }
     /// Checks if the top of the stack is user-data associated with a given tag.
-    pub fn is_userdata(&self, tag: &CString) -> bool {
+    /// NOTE: The `tag` is currently checked by memory address instead of string content.
+    pub fn is_userdata(&self, tag: &'static CStr) -> bool {
         unsafe { yaslapi_sys::YASL_isuserdata(self.state, tag.as_ptr()) }
     }
     /// Checks if the top of the stack is a user-pointer.
@@ -372,13 +390,14 @@ impl State {
         }
     }
     /// Checks if the object at index `n` from the top of the stack is userdata of a given tag.
+    /// NOTE: The `tag` is currently checked by memory address instead of string content.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a C unsigned integer.
-    pub fn is_n_userdata(&mut self, tag: &str, n: usize) -> bool {
+    pub fn is_n_userdata(&mut self, tag: &'static CStr, n: usize) -> bool {
         unsafe {
             yaslapi_sys::YASL_isnuserdata(
                 self.state,
-                tag.as_ptr().cast(),
+                tag.as_ptr(),
                 n.try_into()
                     .expect("Index must be able to safely convert into a C unsigned integer."),
             )
@@ -404,6 +423,9 @@ impl State {
 
     /// Indexes the list on top of the stack and pushes the result to the stack.
     /// If `n` is negative it indexes from the end of the list.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the object on the stack is not a list then it will return `StateError::TypeError`.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a 64-bit signed integer.
     pub fn list_get(&mut self, n: isize) -> Result<StateSuccess, StateError> {
@@ -417,30 +439,43 @@ impl State {
     }
 
     /// Pops the top of the stack and appends it to a list (which should be located directly below the top of the stack).
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the object on the stack is not a list then it will return `StateError::TypeError`.
     pub fn list_push(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_listpush(self.state)) }
     }
 
     /// Loads the specified global from state and pushes it to the stack.
-    /// # Panics
-    /// The string slice `name` must not contain internal zero bytes.
-    pub fn load_global(&mut self, name: &str) -> Result<StateSuccess, StateError> {
-        let name = CString::new(name).unwrap();
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the global does not exist then it will return `StateError::Generic`.
+    pub fn load_global(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_loadglobal(self.state, name.as_ptr())) }
     }
     /// Loads the specified global from state and pushes it to the stack.
-    pub fn load_global_cstr(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the global does not exist then it will return `StateError::Generic`.
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
+    pub fn load_global_slice(&mut self, name: &str) -> Result<StateSuccess, StateError> {
+        let name = CString::new(name).unwrap();
         unsafe { state_result(yaslapi_sys::YASL_loadglobal(self.state, name.as_ptr())) }
     }
 
-    /// Loads a metatable by name.
+    /// Loads a metatable by name. Returns `StateSuccess::Generic` if successful.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
+    /// # Errors
+    /// If the metatable `name` does not exist then it will return `StateError::Generic`.
     pub fn load_mt(&mut self, name: &str) -> Result<StateSuccess, StateError> {
         let name = CString::new(name).unwrap();
         unsafe { state_result(yaslapi_sys::YASL_loadmt(self.state, name.as_ptr())) }
     }
-    /// Loads a metatable by name.
+    /// Loads a metatable by name. Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the metatable `name` does not exist then it will return `StateError::Generic`.
     pub fn load_mt_cstr(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_loadmt(self.state, name.as_ptr())) }
     }
@@ -504,12 +539,33 @@ impl State {
     pub fn peek_type(&self) -> Type {
         unsafe { yaslapi_sys::YASL_peektype(self.state) }.into()
     }
-    /// Returns the type of the top of the stack as a string.
-    #[allow(clippy::missing_panics_doc)]
-    pub fn peek_type_name(&self) -> &str {
-        unsafe { CStr::from_ptr(yaslapi_sys::YASL_peektypename(self.state)) }
-            .to_str()
-            .expect("YASL internal error: YASL_peektypename returned invalid UTF-8")
+    /// Returns the type of the top of the stack as a string, or `None` if no string exists.
+    pub fn peek_type_name(&self) -> Option<&'static CStr> {
+        unsafe {
+            let ptr = yaslapi_sys::YASL_peektypename(self.state);
+            if ptr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(ptr))
+            }
+        }
+    }
+    /// Returns the type of the top of the stack as a string, or `None` if no string exists.
+    /// # Panics
+    /// The type name must contain valid UTF-8. This includes the tags of `UserData` objects.
+    pub fn peek_type_name_slice(&self) -> Option<&'static str> {
+        unsafe {
+            let ptr = yaslapi_sys::YASL_peektypename(self.state);
+            if ptr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(ptr))
+            }
+        }
+        .map(|s| {
+            s.to_str()
+                .expect("YASL_peektypename returned invalid UTF-8")
+        })
     }
 
     /// Returns the bool value at index `n` from the top of the stack, if it is a boolean.
@@ -569,19 +625,44 @@ impl State {
             Some(ptr)
         }
     }
-    /// Returns the type of index `n` from the top of the stack as a string.
+    /// Returns the type of index `n` from the top of the stack as a string, or `None` if no string exists.
     /// # Panics
     /// The argument count `n` must be able to safely convert into a C unsigned integer.
-    pub fn peek_n_typename(&self, n: usize) -> &str {
+    pub fn peek_n_typename(&self, n: usize) -> Option<&'static CStr> {
         unsafe {
-            CStr::from_ptr(yaslapi_sys::YASL_peekntypename(
+            let ptr = yaslapi_sys::YASL_peekntypename(
                 self.state,
                 n.try_into()
                     .expect("Index must be able to safely convert into a C unsigned integer."),
-            ))
+            );
+            if ptr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(ptr))
+            }
         }
-        .to_str()
-        .expect("YASL internal error: YASL_peekntypename returned invalid UTF-8")
+    }
+    /// Returns the type name of index `n` from the top of the stack as a string, or `None` if no string exists.
+    /// # Panics
+    /// The type name must contain valid UTF-8. This includes the tags of `UserData` objects.
+    /// The argument count `n` must be able to safely convert into a C unsigned integer.
+    pub fn peek_n_typename_slice(&self, n: usize) -> Option<&'static str> {
+        unsafe {
+            let ptr = yaslapi_sys::YASL_peekntypename(
+                self.state,
+                n.try_into()
+                    .expect("Index must be able to safely convert into a C unsigned integer."),
+            );
+            if ptr.is_null() {
+                None
+            } else {
+                Some(CStr::from_ptr(ptr))
+            }
+        }
+        .map(|s| {
+            s.to_str()
+                .expect("YASL_peekntypename returned invalid UTF-8")
+        })
     }
 
     /// TODO: Document.
@@ -623,18 +704,25 @@ impl State {
     pub fn pop_int(&mut self) -> i64 {
         unsafe { yaslapi_sys::YASL_popint(self.state) }
     }
-    /// TODO
-    pub fn pop_userdata(&mut self) -> Option<*mut std::os::raw::c_void> {
-        let ptr = unsafe { yaslapi_sys::YASL_popuserdata(self.state) };
-        if ptr.is_null() {
-            None
+    /// Returns the `UserData` value of the top of the stack, if the top of the stack is a `UserData`. Otherwise returns `None`. Removes the top of the stack.
+    pub fn pop_userdata(&mut self) -> Option<NonNull<std::os::raw::c_void>> {
+        if self.peek_type() == Type::UserData {
+            NonNull::new(unsafe { yaslapi_sys::YASL_popuserdata(self.state) })
         } else {
-            Some(ptr)
+            // Ensure that we still pop the value off the stack for the caller's sake.
+            self.pop();
+            None
         }
     }
-    /// TODO
+    /// Returns the `UserPtr` value of the top of the stack, if the top of the stack is a `UserPtr`. Otherwise returns `None`. Removes the top of the stack.
     pub fn pop_userptr(&mut self) -> Option<NonNull<std::os::raw::c_void>> {
-        NonNull::new(unsafe { yaslapi_sys::YASL_popuserptr(self.state) })
+        if self.peek_type() == Type::UserPtr {
+            NonNull::new(unsafe { yaslapi_sys::YASL_popuserptr(self.state) })
+        } else {
+            // Ensure that we still pop the value off the stack for the caller's sake.
+            self.pop();
+            None
+        }
     }
 
     // TODO: Rust doesn't really support variadic argument lists; more reading required.
@@ -685,18 +773,23 @@ impl State {
     pub unsafe fn push_userdata(
         &mut self,
         data: *mut std::os::raw::c_void,
-        tag: &str,
+        tag: &'static CStr,
         destructor: std::option::Option<
-            unsafe extern "C" fn(arg1: *mut YASL_State, arg2: *mut std::os::raw::c_void),
+            unsafe extern "C" fn(state: *mut YASL_State, data: *mut std::os::raw::c_void),
         >,
     ) {
-        unsafe { yaslapi_sys::YASL_pushuserdata(self.state, data, tag.as_ptr().cast(), destructor) }
+        unsafe { yaslapi_sys::YASL_pushuserdata(self.state, data, tag.as_ptr(), destructor) }
     }
     /// Pushes a user-pointer onto the stack.
     /// # Safety
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
-    pub unsafe fn push_userptr(&mut self, userpointer: *mut std::os::raw::c_void) {
-        unsafe { yaslapi_sys::YASL_pushuserptr(self.state, userpointer) }
+    pub unsafe fn push_userptr(&mut self, userptr: Option<NonNull<std::os::raw::c_void>>) {
+        unsafe {
+            yaslapi_sys::YASL_pushuserptr(
+                self.state,
+                userptr.map_or(std::ptr::null_mut(), NonNull::as_ptr),
+            );
+        }
     }
     /// Pushes a nul-terminated string onto the stack. YASL makes a copy of the given string, and manages the memory for it.
     pub fn push_zstr(&mut self, cstring: &CStr) {
@@ -708,12 +801,15 @@ impl State {
     /// with metatables, e.g. `set_mt(..)` and `load_mt(..)`.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
-    pub fn register_mt(&mut self, name: &str) -> Result<StateSuccess, StateError> {
+    pub fn register_mt(&mut self, name: &str) {
         let name = CString::new(name).unwrap();
-        unsafe { state_result(yaslapi_sys::YASL_registermt(self.state, name.as_ptr())) }
+        unsafe { yaslapi_sys::YASL_registermt(self.state, name.as_ptr()) };
     }
 
     /// Recreate the state machine from the given script path.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the script does not exist or cannot be read then it will return `StateError::Generic`.
     /// # Panics
     /// The string slice `script_location` must not contain internal zero bytes.
     pub fn reset_from_script(&mut self, script_location: &str) -> Result<StateSuccess, StateError> {
@@ -733,14 +829,28 @@ impl State {
     }
 
     /// Pops the top of the YASL stack and stores it in the given global.
-    /// # Panics
-    /// The string slice `name` must not contain internal zero bytes.
-    pub fn set_global(&mut self, name: &str) -> Result<StateSuccess, StateError> {
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the global does not exist or is `const` then it will return `StateError::Generic`.
+    pub fn set_global(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
+        unsafe { state_result(yaslapi_sys::YASL_setglobal(self.state, name.as_ptr())) }
+    }
+    /// Pops the top of the YASL stack and stores it in the given global.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the global does not exist or is `const` then it will return `StateError::Generic`.
+    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
+    pub fn set_global_slice(&mut self, name: &str) -> Result<StateSuccess, StateError> {
         let name = CString::new(name).unwrap();
         unsafe { state_result(yaslapi_sys::YASL_setglobal(self.state, name.as_ptr())) }
     }
 
     // TODO: Learn what the exact API here is.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// The top object on the stack must be either a `Table` or `Undef` or it will return `StateError::TypeError`.
+    /// The next object on the stack must be either a `UserData`, `Table`, and `List`
+    /// or it will return `StateError::TypeError`.
     pub fn set_mt(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_setmt(self.state)) }
     }
@@ -764,6 +874,10 @@ impl State {
 
     /// Inserts a key-value pair into the table. The top-most items are the value, then key,
     /// then table. The key and value are popped from the stack.
+    /// Returns `StateSuccess::Generic` if successful.
+    /// # Errors
+    /// If the object third from the top of the stack is not a table then it will return `StateError::TypeError`.
+    /// If the key is of a type that cannot be hashed (e.g., `List`, `Table`, and `UserData`) then it will return `StateError::TypeError`.
     pub fn table_set(&mut self) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_tableset(self.state)) }
     }

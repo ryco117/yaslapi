@@ -44,9 +44,7 @@ fn main() {
     // Helper function to execute source code.
     let execute_helper = |src: &str, args_compile, args_execute_print| {
         let mut state = State::from_source(&src);
-        state
-            .declare_libs()
-            .expect("Could not load standard libraries.");
+        state.declare_libs();
 
         let _ = if args_compile {
             state.compile()
@@ -70,9 +68,7 @@ fn main() {
     // Check if we were given a script location from the arguments.
     if let Some(input) = args.input {
         let mut state = State::from_path(&input).expect("Could not read file.");
-        state
-            .declare_libs()
-            .expect("Could not load standard libraries.");
+        state.declare_libs();
 
         let _ = if args.compile {
             state.compile()
@@ -86,9 +82,7 @@ fn main() {
     let mut state = State::default();
 
     // Declare the standard library.
-    state
-        .declare_libs()
-        .expect("Could not load standard libraries.");
+    state.declare_libs();
 
     // Add a global `quit` function.
     state.push_cfunction(repl_quit, 0);

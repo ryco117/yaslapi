@@ -20,9 +20,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{ffi::CString, ptr::NonNull};
+use std::{
+    ffi::{CStr, CString},
+    ptr::NonNull,
+};
 
-use crate::{CFunction, State, StateError, StateSuccess, state_result, Type};
+use crate::{CFunction, State, StateError, Type};
 
 /// Helper for specifying the functions for a metatable.
 /// Each function will need an identifier, a C-style function, and the number of arguments.
@@ -35,8 +38,10 @@ pub struct MetatableFunction<'a> {
 
 impl State {
     /// Loads all standard libraries into the state and declares them with their default names.
-    pub fn declare_libs(&mut self) -> Result<StateSuccess, StateError> {
-        unsafe { state_result(yaslapi_sys::YASLX_decllibs(self.state)) }
+    pub fn declare_libs(&mut self) {
+        unsafe {
+            yaslapi_sys::YASLX_decllibs(self.state);
+        }
     }
 
     /// Initializes a global variable with the given name and initializes it with the top of the stack.
@@ -99,13 +104,13 @@ impl State {
     /// # Errors
     /// Will return a `StateError::Generic` if the given name is not a global variable.
     /// Will return a `StateError::TypeError` if the object is of a different type than what was expected.
-    pub fn pop_global(
+    pub fn pop_global_slice(
         &mut self,
         name: &str,
         expected_type: Option<Type>,
     ) -> Result<Object, StateError> {
         // Load the global variable onto the stack.
-        self.load_global(name)?;
+        self.load_global_slice(name)?;
 
         // Pop the global variable off the stack and return.
         self.pop_object(expected_type)
@@ -132,7 +137,7 @@ impl State {
             Type::Str => Ok(Object::Str(self.pop_str().unwrap_or_default())),
             Type::List => {
                 // Clone the top of the stack so it isn't consumed by `len`.
-                self.clone_top()?;
+                self.clone_top();
 
                 // Get the length of the list.
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -157,8 +162,14 @@ impl State {
                 }
                 Ok(Object::List(list))
             }
-            //Type::Table => Ok(Object::Table(self.pop_table()?)),
-            //Type::Userdata => Ok(Object::Userdata(self.pop_userdata()?)),
+            //TODO: Type::Table => Ok(Object::Table(self.pop_table()?)),
+            Type::UserData => {
+                let tag = self.peek_type_name();
+                Ok(Object::UserData {
+                    data: self.pop_userdata(),
+                    tag,
+                })
+            }
             Type::UserPtr => Ok(Object::UserPtr(self.pop_userptr())),
             t => {
                 // Temporary warning for unhandled types.
@@ -182,14 +193,17 @@ pub enum Object {
     Str(String),
     List(Vec<Object>),
     //Table(Vec<(Object, Object)>),
-    //Userdata(*mut yaslapi_sys::),
+    UserData {
+        data: Option<NonNull<std::os::raw::c_void>>,
+        tag: Option<&'static CStr>,
+    },
     UserPtr(Option<NonNull<std::os::raw::c_void>>),
     Undef,
 }
 
 /// Get the type of a YASL `Object` enum.
-impl From<Object> for Type {
-    fn from(value: Object) -> Self {
+impl From<&Object> for Type {
+    fn from(value: &Object) -> Self {
         match value {
             Object::Bool(_) => Type::Bool,
             Object::Int(_) => Type::Int,
@@ -197,10 +211,16 @@ impl From<Object> for Type {
             Object::Str(_) => Type::Str,
             Object::List(_) => Type::List,
             //Object::Table(_) => Type::Table,
-            //Object::Userdata(_) => Type::Userdata,
+            Object::UserData { .. } => Type::UserData,
             Object::UserPtr(_) => Type::UserPtr,
             Object::Undef => Type::Undef,
         }
+    }
+}
+/// Get the type of a YASL `Object` enum.
+impl From<Object> for Type {
+    fn from(value: Object) -> Self {
+        Self::from(&value)
     }
 }
 

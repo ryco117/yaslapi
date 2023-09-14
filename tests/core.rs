@@ -95,7 +95,9 @@ fn test_global_mutability() {
     state.init_global(NAME);
 
     // Ensure that the initial value is correct.
-    state.load_global(NAME).expect("Failed to load the global");
+    state
+        .load_global_slice(NAME)
+        .expect("Failed to load the global");
     assert_eq!(state.pop_int(), DEFAULT);
 
     // Execute the state machine a single time.
@@ -104,7 +106,7 @@ fn test_global_mutability() {
         .expect("Failed to execute the state machine");
 
     // Ensure the global has increased.
-    state.load_global(NAME).expect("");
+    state.load_global_slice(NAME).expect("");
     let new_value = state.pop_int();
     assert_eq!(new_value, DEFAULT + 1);
 
@@ -120,6 +122,8 @@ fn test_global_mutability() {
         .expect("Failed to execute the state machine");
 
     // Ensure the global has accrued the correct value.
-    state.load_global(NAME).expect("Failed to load the global");
+    state
+        .load_global_slice(NAME)
+        .expect("Failed to load the global");
     assert_eq!(state.pop_int(), new_value + 3);
 }
