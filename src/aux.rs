@@ -21,11 +21,12 @@
 // SOFTWARE.
 
 use std::{
+    collections::HashMap,
     ffi::{CStr, CString},
     ptr::NonNull,
 };
 
-use crate::{CFunction, State, StateError, Type};
+use crate::{CFunction, InvalidIdentifier, State, StateError, Type, LIFETIME_CSTRINGS};
 
 /// Helper for specifying the functions for a metatable.
 /// Each function will need an identifier, a C-style function, and the number of arguments.
@@ -40,25 +41,35 @@ impl State {
     /// Loads all standard libraries into the state and declares them with their default names.
     pub fn declare_libs(&mut self) {
         unsafe {
-            yaslapi_sys::YASLX_decllibs(self.state);
+            yaslapi_sys::YASLX_decllibs(self.state.as_ptr());
         }
     }
 
     /// Initializes a global variable with the given name and initializes it with the top of the stack.
+    /// # Errors
+    /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
     #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
-    pub fn init_global(&mut self, name: &str) {
+    pub fn init_global(&mut self, name: &str) -> Result<(), InvalidIdentifier> {
+        if !crate::is_valid_identifier(name) {
+            return Err(InvalidIdentifier);
+        }
+
         let var_name = CString::new(name).unwrap();
+        let mut lifetime_strings = LIFETIME_CSTRINGS.lock().unwrap();
 
         // Ensure that if the C-string is already in our map that we use the original pointer.
-        let cstr = self.lifetime_cstrings.get(&var_name);
+        let cstr = lifetime_strings.get(&var_name);
 
         // Initialize the global variable.
-        unsafe { yaslapi_sys::YASLX_initglobal(self.state, cstr.unwrap_or(&var_name).as_ptr()) }
+        unsafe {
+            yaslapi_sys::YASLX_initglobal(self.state.as_ptr(), cstr.unwrap_or(&var_name).as_ptr());
+        }
 
         if cstr.is_none() {
             // Prevent the C-string from being dropped.
-            self.lifetime_cstrings.insert(var_name);
+            lifetime_strings.insert(var_name);
         }
+        Ok(())
     }
 
     /// Inserts all functions in the array into a new table on top of the stack.
@@ -78,7 +89,7 @@ impl State {
         for f in functions {
             let name = CString::new(f.name).unwrap();
             let name_pointer = name.as_ptr();
-            unsafe { yaslapi_sys::YASLX_initglobal(self.state, name_pointer) }
+            unsafe { yaslapi_sys::YASLX_initglobal(self.state.as_ptr(), name_pointer) }
 
             // Create a YASL function from the given data.
             let fn_ = yaslapi_sys::YASLX_function {
@@ -89,12 +100,12 @@ impl State {
             yasl_fns.push(fn_);
 
             // Prevent the C-string from being dropped.
-            self.lifetime_cstrings.insert(name);
+            LIFETIME_CSTRINGS.lock().unwrap().insert(name);
         }
         // Every list must end with this entry.
         yasl_fns.push(SENTINEL_FUNCTION);
 
-        unsafe { yaslapi_sys::YASLX_tablesetfunctions(self.state, yasl_fns.as_mut_ptr()) }
+        unsafe { yaslapi_sys::YASLX_tablesetfunctions(self.state.as_ptr(), yasl_fns.as_mut_ptr()) }
     }
 
     /* Crate-Specific Helpers */
@@ -162,7 +173,7 @@ impl State {
                 }
                 Ok(Object::List(list))
             }
-            //TODO: Type::Table => Ok(Object::Table(self.pop_table()?)),
+            // TODO: Type::Table => Ok(Object::Table(self.pop_table()?)),
             Type::UserData => {
                 let tag = self.peek_type_name();
                 Ok(Object::UserData {
@@ -185,20 +196,79 @@ impl State {
     }
 }
 
-/// Helper enum for wrapping a YASL object
+/// Helper enum for wrapping a YASL `Object`.
+#[derive(Clone, Debug)]
 pub enum Object {
     Bool(bool),
     Int(i64),
     Float(f64),
     Str(String),
     List(Vec<Object>),
-    //Table(Vec<(Object, Object)>),
+    Table(HashMap<HashableObject, Object>),
     UserData {
         data: Option<NonNull<std::os::raw::c_void>>,
         tag: Option<&'static CStr>,
     },
     UserPtr(Option<NonNull<std::os::raw::c_void>>),
     Undef,
+}
+
+/// YASL `Object`s which are capable of being used as keys to a table.
+#[derive(Clone, Debug, Hash, PartialEq)]
+pub enum HashableObject {
+    Bool(bool),
+    Int(i64),
+    Float(HashableF64),
+    Str(String),
+    UserPtr(Option<NonNull<std::os::raw::c_void>>),
+    Undef,
+}
+
+/// Helper struct for making the `Object` type usable for indexing tables.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HashableF64(f64);
+/// Ensure that this type is hashable.
+impl std::hash::Hash for HashableF64 {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_bits().hash(state);
+    }
+}
+/// Ensure that this type is usable as a key in a hash map.
+impl Eq for HashableF64 {}
+impl From<HashableF64> for f64 {
+    /// Helper to get the underlying f64.
+    fn from(value: HashableF64) -> Self {
+        value.0
+    }
+}
+impl TryFrom<Object> for HashableObject {
+    type Error = ();
+    /// Helper to convert a YASL `Object` into a `HashableObject`, or return the error
+    /// value if the type cannot be used as a key.
+    fn try_from(value: Object) -> Result<Self, Self::Error> {
+        match value {
+            Object::Bool(b) => Ok(Self::Bool(b)),
+            Object::Int(i) => Ok(Self::Int(i)),
+            Object::Float(f) => Ok(Self::Float(HashableF64(f))),
+            Object::Str(s) => Ok(Self::Str(s)),
+            Object::UserPtr(p) => Ok(Self::UserPtr(p)),
+            Object::Undef => Ok(Self::Undef),
+            _ => Err(()),
+        }
+    }
+}
+impl From<HashableObject> for Object {
+    /// Helper to convert a `HashableObject` into a YASL `Object`.
+    fn from(value: HashableObject) -> Self {
+        match value {
+            HashableObject::Bool(b) => Self::Bool(b),
+            HashableObject::Int(i) => Self::Int(i),
+            HashableObject::Float(f) => Self::Float(f.into()),
+            HashableObject::Str(s) => Self::Str(s),
+            HashableObject::UserPtr(p) => Self::UserPtr(p),
+            HashableObject::Undef => Self::Undef,
+        }
+    }
 }
 
 /// Get the type of a YASL `Object` enum.
@@ -210,7 +280,7 @@ impl From<&Object> for Type {
             Object::Float(_) => Type::Float,
             Object::Str(_) => Type::Str,
             Object::List(_) => Type::List,
-            //Object::Table(_) => Type::Table,
+            Object::Table(_) => Type::Table,
             Object::UserData { .. } => Type::UserData,
             Object::UserPtr(_) => Type::UserPtr,
             Object::Undef => Type::Undef,

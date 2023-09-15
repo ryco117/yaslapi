@@ -86,7 +86,7 @@ fn main() {
 
     // Add a global `quit` function.
     state.push_cfunction(repl_quit, 0);
-    state.init_global("quit");
+    state.init_global("quit").unwrap();
 
     // Create a new single line editor.
     let mut reader = DefaultEditor::new().expect("Could not allocate a default line editor.");

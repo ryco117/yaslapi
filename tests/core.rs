@@ -45,7 +45,7 @@ fn compile_state(state: &mut State) {
 fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ()) {
     // Init new variable `answer` with the top of the stack (in this case, the `42`).
     state.push_int(42);
-    state.init_global("answer");
+    state.init_global("answer").unwrap();
 
     // Add Rust implemented function `rust_print` to globals.
     state.push_cfunction(rust_print, 0);
@@ -54,7 +54,7 @@ fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ())
     assert_eq!(state.peek_type(), Type::CFn);
 
     // Init the function as a global.
-    state.init_global("rust_print");
+    state.init_global("rust_print").unwrap();
 
     // Now that we're done setting things up, test the state machine.
     test_fn(&mut state);
@@ -92,7 +92,7 @@ fn test_global_mutability() {
 
     // Declare and initialize the global variable.
     state.push_int(DEFAULT);
-    state.init_global(NAME);
+    state.init_global(NAME).unwrap();
 
     // Ensure that the initial value is correct.
     state
