@@ -130,6 +130,7 @@ impl State {
     /// Return the underlying value of the top stack object, optionally ensuring a type, or return an error.
     /// # Errors
     /// Will return a `StateError::TypeError` if the object is of a different type than what was expected.
+    #[allow(clippy::missing_panics_doc)] // Getting a `HashableObject` from a `Table` key can't fail.
     pub fn pop_object(&mut self, expected_type: Option<Type>) -> Result<Object, StateError> {
         // Check the type on the stack.
         let stack_type = self.peek_type();
@@ -173,7 +174,26 @@ impl State {
                 }
                 Ok(Object::List(list))
             }
-            // TODO: Type::Table => Ok(Object::Table(self.pop_table()?)),
+            Type::Table => {
+                let mut table = HashMap::new();
+
+                // Give an empty start index to `table_next` to get the first key.
+                self.push_undef();
+
+                // Iterate over the table and insert each key-value pair into the map.
+                while self.table_next() {
+                    // Pop the key and value off of the stack.
+                    // Similat to the note above, we don't forward the expected type
+                    // to the key or value.
+                    let k: HashableObject = self
+                        .pop_object(None)?
+                        .try_into()
+                        .expect("Internal Error: Invalid key type.");
+                    let v = self.pop_object(None)?;
+                    table.insert(k, v);
+                }
+                Ok(Object::Table(table))
+            }
             Type::UserData => {
                 let tag = self.peek_type_name();
                 Ok(Object::UserData {
@@ -214,7 +234,7 @@ pub enum Object {
 }
 
 /// YASL `Object`s which are capable of being used as keys to a table.
-#[derive(Clone, Debug, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum HashableObject {
     Bool(bool),
     Int(i64),

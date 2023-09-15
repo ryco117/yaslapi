@@ -944,6 +944,7 @@ impl State {
     /// the table, followed by the table itself. The index is popped, and then if there are
     /// more elements in the table, the next index and value are pushed. No values are pushed
     /// if we are already at the end of the table.
+    /// Returns `true` if the next index and value were pushed, `false` otherwise.
     pub fn table_next(&mut self) -> bool {
         unsafe { yaslapi_sys::YASL_tablenext(self.state.as_ptr()) }
     }
