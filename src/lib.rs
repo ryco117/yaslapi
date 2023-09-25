@@ -833,16 +833,14 @@ impl State {
     pub fn push_undef(&mut self) {
         unsafe { yaslapi_sys::YASL_pushundef(self.state.as_ptr()) }
     }
-    /// Pushes user-data onto the stack, along with a unique tag and destructor for this type.
+    /// Pushes user-data onto the stack as a pointer with a unique tag and destructor for this type.
     /// # Safety
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
     pub unsafe fn push_userdata(
         &mut self,
         data: Option<NonNull<c_void>>,
         tag: &'static CStr,
-        destructor: std::option::Option<
-            unsafe extern "C" fn(state: *mut YASL_State, data: *mut c_void),
-        >,
+        destructor: Option<unsafe extern "C" fn(state: *mut YASL_State, data: *mut c_void)>,
     ) {
         unsafe {
             yaslapi_sys::YASL_pushuserdata(
@@ -850,6 +848,28 @@ impl State {
                 data.map_or(null_mut(), std::ptr::NonNull::as_ptr),
                 tag.as_ptr(),
                 destructor,
+            );
+        }
+    }
+    /// Pushes user-data onto the stack as a `Box` along with a unique tag and `Box` destructor.
+    /// This allows YASL to safely take ownership of the data and free it when it is no longer needed.
+    pub fn push_userdata_box<T>(&mut self, data: T, tag: &'static CStr) {
+        /// A helper function for dropping a `Box` of type `T` safely from YASL.
+        unsafe extern "C" fn box_drop<Q>(_: *mut YASL_State, data: *mut c_void) {
+            unsafe {
+                let _ = Box::<Q>::from_raw(data.cast());
+            }
+        }
+
+        // Put the given data on the heap as a `Box`.
+        let data = Box::<T>::new(data);
+
+        // Push the `Box` pointer onto the stack as a user-data object.
+        unsafe {
+            self.push_userdata(
+                Some(NonNull::new_unchecked(Box::<T>::into_raw(data).cast())),
+                tag,
+                Some(box_drop::<T>),
             );
         }
     }

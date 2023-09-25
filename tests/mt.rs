@@ -20,44 +20,41 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::{
-    ffi::CString,
-    ops::AddAssign,
-    os::raw::c_void,
-    ptr::NonNull,
-};
+use std::ffi::CString;
 
 use once_cell::sync::Lazy;
 use yaslapi::{aux::MetatableFunction, State, StateError};
 use yaslapi_sys::YASL_State;
 
+type Quaternion = cgmath::Quaternion<f64>;
+
 static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwrap());
 
-/// Example of a user-defined data type.
-#[derive(Clone, Copy, Debug)]
-struct Quaternion {
-    x: f64,
-    y: f64,
-    z: f64,
-    w: f64,
-}
+// /// Example of a user-defined data type.
+// #[derive(Clone, Copy, Debug)]
+// struct Quaternion {
+//     x: f64,
+//     y: f64,
+//     z: f64,
+//     w: f64,
+// }
 
-/// Rust-defined operations on the `Quaternion` type.
-impl AddAssign for Quaternion {
-    fn add_assign(&mut self, rhs: Self) {
-        self.x += rhs.x;
-        self.y += rhs.y;
-        self.z += rhs.z;
-        self.w += rhs.w;
-    }
-}
+// impl Quaternion {
+//     /// Create a new `Quaternion` from the given values.
+//     fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
+//         Self { x, y, z, w }
+//     }
+// }
 
-/// A helper for getting a raw pointer from a safe `Quaternion` object.
-impl From<Box<Quaternion>> for NonNull<c_void> {
-    fn from(ptr: Box<Quaternion>) -> Self {
-        unsafe { NonNull::new_unchecked(Box::<Quaternion>::into_raw(ptr).cast()) }
-    }
-}
+// /// Rust-defined operations on the `Quaternion` type.
+// impl AddAssign for Quaternion {
+//     fn add_assign(&mut self, rhs: Self) {
+//         self.x += rhs.x;
+//         self.y += rhs.y;
+//         self.z += rhs.z;
+//         self.w += rhs.w;
+//     }
+// }
 
 /// Implement the `__add` metatable method for the `Quaternion` type.
 unsafe extern "C" fn quat_add(state: *mut YASL_State) -> i32 {
@@ -88,27 +85,17 @@ unsafe extern "C" fn quat_tostr(state: *mut YASL_State) -> i32 {
     }
 
     // Pop the quaternion from the stack.
-    let Quaternion { x, y, z, w } = if let Some(p) = state.peek_userdata() {
+    let quaternion: Quaternion = if let Some(p) = state.peek_userdata() {
         *p.as_ptr().cast()
     } else {
         return StateError::ValueError.into();
     };
 
     // Push the string representation of the quaternion.
-    state.push_str(&format!("quaternion({x}, {y}, {z}, {w})"));
+    state.push_str(&format!("{quaternion:?}"));
 
     // Return the number of values pushed to the stack.
     1
-}
-
-/// Implement a safe destructor for the `Quaternion` type.
-unsafe extern "C" fn quat_drop(_state: *mut YASL_State, data: *mut std::os::raw::c_void) {
-    match NonNull::new(data) {
-        Some(ptr) => {
-            let _ = unsafe { Box::<Quaternion>::from_raw(ptr.as_ptr().cast()) };
-        }
-        None => (),
-    }
 }
 
 #[test]
@@ -131,19 +118,7 @@ fn test_basic_metatable() {
     state.pop();
 
     // Push two test quaternions as globals.
-    let p = Box::new(Quaternion {
-        x: 1.0,
-        y: 2.0,
-        z: 3.0,
-        w: 4.0,
-    });
-    let q = Box::new(Quaternion {
-        x: -2.0,
-        y: -1.0,
-        z: -4.0,
-        w: -3.0,
-    });
-    unsafe { state.push_userdata(Some(p.into()), &TABLE_NAME, Some(quat_drop)) };
+    state.push_userdata_box(Quaternion::new(1., 2., 3., 4.), &TABLE_NAME);
     state
         .load_mt(&TABLE_NAME)
         .expect("Failed to find the metatable.");
@@ -154,7 +129,7 @@ fn test_basic_metatable() {
         .init_global("p")
         .expect("Couldn't declare the new global.");
 
-    unsafe { state.push_userdata(Some(q.into()), &TABLE_NAME, Some(quat_drop)) };
+    state.push_userdata_box(Quaternion::new(-2., -1., -4., -3.), &TABLE_NAME);
     state
         .load_mt(&TABLE_NAME)
         .expect("Failed to find the metatable.");
