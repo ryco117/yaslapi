@@ -20,29 +20,31 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use yaslapi::{State, StateSuccess, Type};
+use yaslapi::{State, Type};
 use yaslapi_sys::YASL_State;
 
 // C-style function to print a constant string.
 unsafe extern "C" fn rust_print(_state: *mut YASL_State) -> i32 {
     println!("This is a test");
-    StateSuccess::Generic.into()
+
+    // Return the number of return values pushed to the YASL stack.
+    0
 }
 
-// Given a new YASL `State`, compile and execute immediately.
+/// Given a new YASL `State`, compile and execute immediately.
 fn execute_state(state: &mut State) {
     // Execute the state machine.
     assert!(state.execute().is_ok());
 }
 
-// Given a new YASL `State`, only compile.
+/// Given a new YASL `State`, only compile.
 fn compile_state(state: &mut State) {
     // Execute the state machine.
     assert!(state.compile().is_ok());
 }
 
-// Given a new YASL `State`, do some basic tests.
-fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ()) {
+/// Given a new YASL `State`, do some basic tests.
+fn test_core_helper(mut state: State, test_fn: &dyn Fn(&mut State) -> ()) {
     // Init new variable `answer` with the top of the stack (in this case, the `42`).
     state.push_int(42);
     state.init_global("answer").unwrap();
@@ -60,28 +62,28 @@ fn test_core_functionality(mut state: State, test_fn: &dyn Fn(&mut State) -> ())
     test_fn(&mut state);
 }
 
-// Test core functionality from script.
+/// Test core functionality from script.
 #[test]
 fn test_core_functionality_from_script() {
-    test_core_functionality(
+    test_core_helper(
         State::from_path("tests/test.yasl").expect("Could not read the test file."),
         &compile_state,
     );
-    test_core_functionality(
+    test_core_helper(
         State::from_path("tests/test.yasl").expect("Could not read the test file."),
         &execute_state,
     );
 }
 
-// Test core functionality from source string.
+/// Test core functionality from source string.
 #[test]
 fn test_core_functionality_from_source() {
     let source_str = include_str!("test.yasl");
-    test_core_functionality(State::from_source(source_str), &compile_state);
-    test_core_functionality(State::from_source(source_str), &execute_state);
+    test_core_helper(State::from_source(source_str), &compile_state);
+    test_core_helper(State::from_source(source_str), &execute_state);
 }
 
-// Test mutability of the globals' state.
+/// Test mutability of global variables and preserving their state over multiple executions.
 #[test]
 fn test_global_mutability() {
     const NAME: &str = "x";

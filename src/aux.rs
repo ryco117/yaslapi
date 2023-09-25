@@ -45,10 +45,12 @@ impl State {
         }
     }
 
-    /// Initializes a global variable with the given name and initializes it with the top of the stack.
+    /// Declares a global variable with the given name and initializes it with the top of the stack.
+    /// The top of the stack is popped after the global is initialized.
     /// # Errors
     /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
-    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
     pub fn init_global(&mut self, name: &str) -> Result<(), InvalidIdentifier> {
         if !crate::is_valid_identifier(name) {
             return Err(InvalidIdentifier);
@@ -58,14 +60,17 @@ impl State {
         let mut lifetime_strings = LIFETIME_CSTRINGS.lock().unwrap();
 
         // Ensure that if the C-string is already in our map that we use the original pointer.
-        let cstr = lifetime_strings.get(&var_name);
+        let existing_cstr = lifetime_strings.get(&var_name);
 
         // Initialize the global variable.
         unsafe {
-            yaslapi_sys::YASLX_initglobal(self.state.as_ptr(), cstr.unwrap_or(&var_name).as_ptr());
+            yaslapi_sys::YASLX_initglobal(
+                self.state.as_ptr(),
+                existing_cstr.unwrap_or(&var_name).as_ptr(),
+            );
         }
 
-        if cstr.is_none() {
+        if existing_cstr.is_none() {
             // Prevent the C-string from being dropped.
             lifetime_strings.insert(var_name);
         }
@@ -73,7 +78,8 @@ impl State {
     }
 
     /// Inserts all functions in the array into a new table on top of the stack.
-    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
+    /// # Panics
+    /// The name of each function must not contain internal zero bytes.
     pub fn table_set_functions(&mut self, functions: &[MetatableFunction]) {
         // Create a sentinel function to mark the end of the array.
         const SENTINEL_FUNCTION: yaslapi_sys::YASLX_function = yaslapi_sys::YASLX_function {
@@ -89,15 +95,13 @@ impl State {
         for f in functions {
             let name = CString::new(f.name).unwrap();
             let name_pointer = name.as_ptr();
-            unsafe { yaslapi_sys::YASLX_initglobal(self.state.as_ptr(), name_pointer) }
 
             // Create a YASL function from the given data.
-            let fn_ = yaslapi_sys::YASLX_function {
+            yasl_fns.push(yaslapi_sys::YASLX_function {
                 name: name_pointer,
                 fn_: Some(f.cfn),
                 args: f.args as std::os::raw::c_int,
-            };
-            yasl_fns.push(fn_);
+            });
 
             // Prevent the C-string from being dropped.
             LIFETIME_CSTRINGS.lock().unwrap().insert(name);
@@ -262,7 +266,7 @@ impl From<HashableF64> for f64 {
     }
 }
 impl TryFrom<Object> for HashableObject {
-    type Error = ();
+    type Error = Type;
     /// Helper to convert a YASL `Object` into a `HashableObject`, or return the error
     /// value if the type cannot be used as a key.
     fn try_from(value: Object) -> Result<Self, Self::Error> {
@@ -273,7 +277,7 @@ impl TryFrom<Object> for HashableObject {
             Object::Str(s) => Ok(Self::Str(s)),
             Object::UserPtr(p) => Ok(Self::UserPtr(p)),
             Object::Undef => Ok(Self::Undef),
-            _ => Err(()),
+            v => Err(v.into()),
         }
     }
 }
@@ -362,5 +366,12 @@ impl TryFrom<Object> for Vec<Object> {
             Object::List(list) => Ok(list),
             o => Err(o.into()),
         }
+    }
+}
+
+impl<'a> MetatableFunction<'a> {
+    /// Create a new `MetatableFunction` from the given data.
+    pub fn new(name: &'a str, cfn: CFunction, args: isize) -> Self {
+        Self { name, cfn, args }
     }
 }

@@ -34,7 +34,9 @@
 //! // C-style function to print a constant string.
 //! unsafe extern "C" fn rust_print(_state: *mut yaslapi_sys::YASL_State) -> i32 {
 //!     println!("This is a test");
-//!     StateSuccess::Generic.into()
+//!
+//!     // Return the number of return values pushed to the YASL stack.
+//!     0
 //! }
 //!
 //! fn main() {
@@ -65,11 +67,12 @@ use regex::Regex;
 use std::{
     collections::HashSet,
     ffi::{CStr, CString},
-    ptr::NonNull,
+    os::raw::c_void,
+    ptr::{null_mut, NonNull},
     sync::Mutex,
 };
 
-mod aux;
+pub mod aux;
 
 use yaslapi_sys::YASL_State;
 
@@ -137,6 +140,7 @@ static LIFETIME_CSTRINGS: Lazy<Mutex<HashSet<CString>>> = Lazy::new(Mutex::defau
 /// Wrapper for the YASL state.
 pub struct State {
     state: NonNull<YASL_State>,
+    owns_state: bool,
 }
 
 /// Error returned when trying to initialize a global variable with an invalid name.
@@ -154,14 +158,18 @@ pub fn is_valid_identifier(name: &str) -> bool {
 
 impl State {
     /// Initialize a new YASL `State` from a script's filepath. Returns `None` if the file does not exist or cannot be read.
-    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
+    /// # Panics
+    /// The string slice `script_location` must not contain internal zero bytes.
     #[must_use]
     pub fn from_path(script_location: &str) -> Option<Self> {
         let script_location = CString::new(script_location).unwrap();
         let ptr = unsafe { yaslapi_sys::YASL_newstate(script_location.as_ptr()) };
 
         // Ensure that the pointer is not null before returning the final `State`.
-        NonNull::new(ptr).map(|state| Self { state })
+        NonNull::new(ptr).map(|state| Self {
+            state,
+            owns_state: true,
+        })
     }
 
     /// Initialize a new YASL `State` from a string containing the source code.
@@ -174,6 +182,7 @@ impl State {
                     source.len(),
                 ))
             },
+            owns_state: true,
         }
     }
 
@@ -188,6 +197,7 @@ impl State {
 
     /// Add a new global variable to the state with default value `undef`.
     /// The variable `name` must be a valid `YASL` identifier.
+    /// Adds `name` to the internal map of `CString`s that are kept alive for the lifetime of the program.
     /// # Errors
     /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
     /// # Panics
@@ -201,14 +211,17 @@ impl State {
         let mut lifetime_strings = LIFETIME_CSTRINGS.lock().unwrap();
 
         // Ensure that if the C-string is already in our map that we use the original pointer.
-        let cstr = lifetime_strings.get(&var_name);
+        let existing_cstr = lifetime_strings.get(&var_name);
 
         // Declare the global variable.
         unsafe {
-            yaslapi_sys::YASL_declglobal(self.state.as_ptr(), cstr.unwrap_or(&var_name).as_ptr())
+            yaslapi_sys::YASL_declglobal(
+                self.state.as_ptr(),
+                existing_cstr.unwrap_or(&var_name).as_ptr(),
+            )
         };
 
-        if cstr.is_none() {
+        if existing_cstr.is_none() {
             // Prevent the C-string from being dropped.
             lifetime_strings.insert(var_name);
         }
@@ -506,19 +519,21 @@ impl State {
         }
     }
 
-    /// Loads a metatable by name. Returns `StateSuccess::Generic` if successful.
+    /// Loads a metatable by name. Returns error `StateError::Generic` if the metatable
+    /// could not be found, else `StateSuccess::Generic`.
+    /// # Errors
+    /// If the metatable `name` does not exist then it will return `StateError::Generic`.
+    pub fn load_mt(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
+        unsafe { state_result(yaslapi_sys::YASL_loadmt(self.state.as_ptr(), name.as_ptr())) }
+    }
+    /// Loads a metatable by name. Returns error `StateError::Generic` if the metatable
+    /// could not be found, else `StateSuccess::Generic`.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
     /// # Errors
     /// If the metatable `name` does not exist then it will return `StateError::Generic`.
-    pub fn load_mt(&mut self, name: &str) -> Result<StateSuccess, StateError> {
+    pub fn load_mt_slice(&mut self, name: &str) -> Result<StateSuccess, StateError> {
         let name = CString::new(name).unwrap();
-        unsafe { state_result(yaslapi_sys::YASL_loadmt(self.state.as_ptr(), name.as_ptr())) }
-    }
-    /// Loads a metatable by name. Returns `StateSuccess::Generic` if successful.
-    /// # Errors
-    /// If the metatable `name` does not exist then it will return `StateError::Generic`.
-    pub fn load_mt_cstr(&mut self, name: &CStr) -> Result<StateSuccess, StateError> {
         unsafe { state_result(yaslapi_sys::YASL_loadmt(self.state.as_ptr(), name.as_ptr())) }
     }
 
@@ -564,24 +579,15 @@ impl State {
         unsafe { yaslapi_sys::YASL_peekint(self.state.as_ptr()) }
     }
     /// Returns the userdata value of the top of the stack, if the top of the stack is a userdata.
+    /// TODO: At the time of this note, Sept. 24/2023, `YASL_peekuserdata(..)` is declared but not implemented. Use this API when it is implemented.
     #[must_use]
-    pub fn peek_userdata(&self) -> Option<*mut std::os::raw::c_void> {
-        let ptr = unsafe { yaslapi_sys::YASL_peekuserdata(self.state.as_ptr()) };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
+    pub fn peek_userdata(&self) -> Option<NonNull<c_void>> {
+        NonNull::new(unsafe { yaslapi_sys::YASL_peeknuserdata(self.state.as_ptr(), 0) })
     }
     /// Returns the userptr value of the top of the stack, if the top of the stack is a userptr.
     #[must_use]
-    pub fn peek_userptr(&self) -> Option<*mut std::os::raw::c_void> {
-        let ptr = unsafe { yaslapi_sys::YASL_peekuserptr(self.state.as_ptr()) };
-        if ptr.is_null() {
-            None
-        } else {
-            Some(ptr)
-        }
+    pub fn peek_userptr(&self) -> Option<NonNull<c_void>> {
+        NonNull::new(unsafe { yaslapi_sys::YASL_peekuserptr(self.state.as_ptr()) })
     }
     /// Returns the type of the top of the stack.
     #[must_use]
@@ -666,7 +672,7 @@ impl State {
     /// # Panics
     /// The argument count `n` must be able to safely convert into a C unsigned integer.
     #[must_use]
-    pub fn peek_n_userdata(&self, n: usize) -> Option<*mut std::os::raw::c_void> {
+    pub fn peek_n_userdata(&self, n: usize) -> Option<*mut c_void> {
         let ptr = unsafe {
             yaslapi_sys::YASL_peeknuserdata(
                 self.state.as_ptr(),
@@ -763,7 +769,7 @@ impl State {
         unsafe { yaslapi_sys::YASL_popint(self.state.as_ptr()) }
     }
     /// Returns the `UserData` value of the top of the stack, if the top of the stack is a `UserData`. Otherwise returns `None`. Removes the top of the stack.
-    pub fn pop_userdata(&mut self) -> Option<NonNull<std::os::raw::c_void>> {
+    pub fn pop_userdata(&mut self) -> Option<NonNull<c_void>> {
         if self.peek_type() == Type::UserData {
             NonNull::new(unsafe { yaslapi_sys::YASL_popuserdata(self.state.as_ptr()) })
         } else {
@@ -773,7 +779,7 @@ impl State {
         }
     }
     /// Returns the `UserPtr` value of the top of the stack, if the top of the stack is a `UserPtr`. Otherwise returns `None`. Removes the top of the stack.
-    pub fn pop_userptr(&mut self) -> Option<NonNull<std::os::raw::c_void>> {
+    pub fn pop_userptr(&mut self) -> Option<NonNull<c_void>> {
         if self.peek_type() == Type::UserPtr {
             NonNull::new(unsafe { yaslapi_sys::YASL_popuserptr(self.state.as_ptr()) })
         } else {
@@ -785,7 +791,7 @@ impl State {
 
     // TODO: Rust doesn't really support variadic argument lists; more reading required.
     // Prints a runtime error. @param S the YASL_State in which the error occurred. @param fmt a format string, taking the same parameters as printf.
-    // pub fn print_err(S: *mut YASL_State, fmt: *const std::os::raw::c_char, ...) {
+    // pub fn print_err(S: *mut YASL_State, fmt: *const c_char, ...) {
     //     unsafe { yaslapi_sys::YASL_print_err(S, fmt) }
     // }
 
@@ -832,20 +838,25 @@ impl State {
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
     pub unsafe fn push_userdata(
         &mut self,
-        data: *mut std::os::raw::c_void,
+        data: Option<NonNull<c_void>>,
         tag: &'static CStr,
         destructor: std::option::Option<
-            unsafe extern "C" fn(state: *mut YASL_State, data: *mut std::os::raw::c_void),
+            unsafe extern "C" fn(state: *mut YASL_State, data: *mut c_void),
         >,
     ) {
         unsafe {
-            yaslapi_sys::YASL_pushuserdata(self.state.as_ptr(), data, tag.as_ptr(), destructor);
+            yaslapi_sys::YASL_pushuserdata(
+                self.state.as_ptr(),
+                data.map_or(null_mut(), std::ptr::NonNull::as_ptr),
+                tag.as_ptr(),
+                destructor,
+            );
         }
     }
     /// Pushes a user-pointer onto the stack.
     /// # Safety
     /// Rust cannot make safety guarantees about data that is being pointed to in YASL.
-    pub unsafe fn push_userptr(&mut self, userptr: Option<NonNull<std::os::raw::c_void>>) {
+    pub unsafe fn push_userptr(&mut self, userptr: Option<NonNull<c_void>>) {
         unsafe {
             yaslapi_sys::YASL_pushuserptr(
                 self.state.as_ptr(),
@@ -858,14 +869,35 @@ impl State {
         unsafe { yaslapi_sys::YASL_pushzstr(self.state.as_ptr(), cstring.as_ptr()) }
     }
 
-    /// Registers a metatable with name `name`. After this returns, the
-    /// metatable can be referred to by `name` in other functions dealing
-    /// with metatables, e.g. `set_mt(..)` and `load_mt(..)`.
+    /// Registers a metatable with name `name`. After this the metatable
+    /// can be referred to by `name` in other functions dealing with
+    /// metatables, e.g. `set_mt(..)` and `load_mt(..)`.
+    pub fn register_mt(&mut self, name: &'static CStr) {
+        unsafe { yaslapi_sys::YASL_registermt(self.state.as_ptr(), name.as_ptr()) };
+    }
+    /// Registers a metatable with name `name`. After this the metatable
+    /// can be referred to by `name` in other functions dealing with
+    /// metatables, e.g. `set_mt(..)` and `load_mt(..)`.
+    /// Adds `name` to the internal map of `CString`s that are kept alive for the lifetime of the program.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
-    pub fn register_mt(&mut self, name: &str) {
+    pub fn register_mt_slice(&mut self, name: &str) {
         let name = CString::new(name).unwrap();
-        unsafe { yaslapi_sys::YASL_registermt(self.state.as_ptr(), name.as_ptr()) };
+        let mut lifetime_strings = LIFETIME_CSTRINGS.lock().unwrap();
+
+        // Ensure that if the C-string is already in our map that we use the original pointer.
+        let existing_cstr = lifetime_strings.get(&name);
+        unsafe {
+            yaslapi_sys::YASL_registermt(
+                self.state.as_ptr(),
+                existing_cstr.unwrap_or(&name).as_ptr(),
+            )
+        };
+
+        if existing_cstr.is_none() {
+            // Prevent the C-string from being dropped.
+            lifetime_strings.insert(name);
+        }
     }
 
     /// Recreate the state machine from the given script path.
@@ -910,7 +942,8 @@ impl State {
     /// Returns `StateSuccess::Generic` if successful.
     /// # Errors
     /// If the global does not exist or is `const` then it will return `StateError::Generic`.
-    #[allow(clippy::missing_panics_doc)] // Building a `CString` from a `&str` can't fail.
+    /// # Panics
+    /// The string slice `name` must not contain internal zero bytes.
     pub fn set_global_slice(&mut self, name: &str) -> Result<StateSuccess, StateError> {
         let name = CString::new(name).unwrap();
         unsafe {
@@ -981,10 +1014,26 @@ impl Default for State {
     }
 }
 
-/// Automatically perform proper cleanup of the YASL `State`.
+/// Automatically perform proper cleanup of the YASL `State` if we allocated this state.
 impl Drop for State {
     fn drop(&mut self) {
-        unsafe { yaslapi_sys::YASL_delstate(self.state.as_ptr()) };
+        if self.owns_state {
+            unsafe { yaslapi_sys::YASL_delstate(self.state.as_ptr()) };
+        }
+    }
+}
+
+impl TryFrom<*mut YASL_State> for State {
+    type Error = &'static str;
+
+    /// Safely convert from a raw pointer to a YASL `State`.
+    fn try_from(state: *mut YASL_State) -> Result<Self, Self::Error> {
+        NonNull::new(state)
+            .ok_or("Null pointer was passed to State::try_from.")
+            .map(|state| Self {
+                state,
+                owns_state: false,
+            })
     }
 }
 

@@ -15,7 +15,7 @@ const AUTHORS: &str = "Thiabaud Engelbrecht, Ryan Andersen";
 // Use crate `clap` to parse command line arguments.
 #[derive(Parser)]
 #[command(about = ABOUT, author = AUTHORS, version, long_about = None)]
-// Default template does not contain an authors
+// Default template does not contain an authors section.
 #[command(
     help_template = "Authors: {author-with-newline}Version: {version}\n{about-section}\n{usage-heading} {usage}\n\n{all-args}{tab}"
 )]
