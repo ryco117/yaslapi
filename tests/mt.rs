@@ -31,46 +31,50 @@ type Quaternion = cgmath::Quaternion<f64>;
 // Use lazy evaluation to get a static CString.
 static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwrap());
 
-/// Implement the `__add` metatable method for the `Quaternion` type.
-unsafe extern "C" fn quat_add(state: *mut YASL_State) -> i32 {
-    let mut state: State = state.try_into().expect("State is null");
-    if !(state.is_n_userdata(&TABLE_NAME, 0) && state.is_n_userdata(&TABLE_NAME, 1)) {
-        return 0;
-    }
-
-    let (p, q): (*mut Quaternion, *const Quaternion) =
-        if let (Some(q), Some(p)) = (state.pop_userdata(), state.peek_userdata()) {
-            (p.as_ptr().cast(), q.as_ptr().cast())
-        } else {
+use yaslapi::aux::YaslCFn;
+yaslapi::new_cfn! {
+    /// Implement the `__add` metatable method for the `Quaternion` type.
+    quat_add, QUAT_ADD, 2, state {
+        if !(state.is_n_userdata(&TABLE_NAME, 0) && state.is_n_userdata(&TABLE_NAME, 1)) {
             return 0;
+        }
+
+        let (p, q): (*mut Quaternion, *const Quaternion) =
+            if let (Some(q), Some(p)) = (state.pop_userdata(), state.peek_userdata()) {
+                (p.as_ptr().cast(), q.as_ptr().cast())
+            } else {
+                return 0;
+            };
+
+        // Modify the first quaternion in place.
+        *p += *q;
+
+        // Return the number of return values pushed to the stack.
+        1
+    }
+}
+
+yaslapi::new_cfn! {
+    /// Implement the `tostr` metatable method for the `Quaternion` type.
+    quat_tostr, QUAT_TOSTR, 1, state {
+        if !state.is_userdata(&TABLE_NAME) {
+            state.push_str("Not a quaternion.");
+            return StateError::TypeError.into();
+        }
+
+        // Pop the quaternion from the stack.
+        let quaternion: Quaternion = if let Some(p) = state.peek_userdata() {
+            *p.as_ptr().cast()
+        } else {
+            return StateError::ValueError.into();
         };
 
-    // Modify the first quaternion in place.
-    *p += *q;
+        // Push the string representation of the quaternion.
+        state.push_str(&format!("{quaternion:?}"));
 
-    // Return the number of return values pushed to the stack.
-    1
-}
-/// Implement the `tostr` metatable method for the `Quaternion` type.
-unsafe extern "C" fn quat_tostr(state: *mut YASL_State) -> i32 {
-    let mut state: State = state.try_into().expect("State is null");
-    if !state.is_userdata(&TABLE_NAME) {
-        state.push_str("Not a quaternion.");
-        return StateError::TypeError.into();
+        // Return the number of values pushed to the stack.
+        1
     }
-
-    // Pop the quaternion from the stack.
-    let quaternion: Quaternion = if let Some(p) = state.peek_userdata() {
-        *p.as_ptr().cast()
-    } else {
-        return StateError::ValueError.into();
-    };
-
-    // Push the string representation of the quaternion.
-    state.push_str(&format!("{quaternion:?}"));
-
-    // Return the number of values pushed to the stack.
-    1
 }
 
 #[test]
@@ -84,7 +88,7 @@ fn test_basic_metatable() {
 
     // Register the metatable functions to the table on the stack.
     let functions = [
-        MetatableFunction::new("__add", quat_add, 2),
+        MetatableFunction::new("__add", QUAT_ADD.cfn, QUAT_ADD.args),
         MetatableFunction::new("tostr", quat_tostr, 1),
     ];
     state.table_set_functions(&functions);

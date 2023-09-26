@@ -26,7 +26,28 @@ use std::{
     ptr::NonNull,
 };
 
+use yaslapi_sys::YASL_State;
+
 use crate::{CFunction, InvalidIdentifier, State, StateError, Type, LIFETIME_CSTRINGS};
+
+/// Helper type for wrapping a C-style function pointer.
+pub struct YaslCFn {
+    pub cfn: unsafe extern "C" fn(*mut YASL_State) -> i32,
+    pub args: isize,
+}
+
+#[macro_export]
+macro_rules! new_cfn {
+    ($(#[$attr:meta])* $fn_name:ident, $const_name:ident, $args:expr, $state:ident $func:expr) => {
+        $(#[$attr])*
+        unsafe extern "C" fn $fn_name(state: *mut YASL_State) -> i32 {
+            let mut $state: State = state.try_into().expect("State is null");
+            $func
+        }
+        const $const_name: YaslCFn = YaslCFn { cfn: $fn_name, args: $args };
+    }
+}
+pub use new_cfn;
 
 /// Helper for specifying the functions for a metatable.
 /// Each function will need an identifier, a C-style function, and the number of arguments.
@@ -68,6 +89,7 @@ impl State {
     /// a valid C-string pointer for the lifetime of the program, as YASL requires.
     /// # Errors
     /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
+    #[allow(clippy::missing_panics_doc)] // Unwrapping mutex lock should never fail.
     pub fn init_global_slice(&mut self, name: &str) -> Result<(), InvalidIdentifier> {
         // Ensure that the name is a valid YASL identifier.
         if !crate::is_valid_identifier(name) {
