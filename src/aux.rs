@@ -38,13 +38,16 @@ pub struct YaslCFn {
 
 #[macro_export]
 macro_rules! new_cfn {
-    ($(#[$attr:meta])* $fn_name:ident, $const_name:ident, $args:expr, $state:ident $func:expr) => {
+    ($(#[$attr:meta])* $name:ident, $args:expr, $state:ident $func:expr) => {
         $(#[$attr])*
-        unsafe extern "C" fn $fn_name(state: *mut YASL_State) -> i32 {
-            let mut $state: State = state.try_into().expect("State is null");
-            $func
+        paste::paste! {
+            unsafe extern "C" fn [<$name:lower _impl>](state: *mut YASL_State) -> i32 {
+                let mut $state: State = state.try_into().expect("State is null");
+                $func
+            }
+            const $name: YaslCFn = YaslCFn { cfn: [<$name:lower _impl>], args: $args };
+            
         }
-        const $const_name: YaslCFn = YaslCFn { cfn: $fn_name, args: $args };
     }
 }
 pub use new_cfn;

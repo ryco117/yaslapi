@@ -34,7 +34,7 @@ static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwra
 use yaslapi::aux::YaslCFn;
 yaslapi::new_cfn! {
     /// Implement the `__add` metatable method for the `Quaternion` type.
-    quat_add, QUAT_ADD, 2, state {
+    QUAT_ADD, 2, state {
         if !(state.is_n_userdata(&TABLE_NAME, 0) && state.is_n_userdata(&TABLE_NAME, 1)) {
             return 0;
         }
@@ -56,7 +56,7 @@ yaslapi::new_cfn! {
 
 yaslapi::new_cfn! {
     /// Implement the `tostr` metatable method for the `Quaternion` type.
-    quat_tostr, QUAT_TOSTR, 1, state {
+    QUAT_TOSTR, 1, state {
         if !state.is_userdata(&TABLE_NAME) {
             state.push_str("Not a quaternion.");
             return StateError::TypeError.into();
@@ -89,7 +89,7 @@ fn test_basic_metatable() {
     // Register the metatable functions to the table on the stack.
     let functions = [
         MetatableFunction::new("__add", QUAT_ADD.cfn, QUAT_ADD.args),
-        MetatableFunction::new("tostr", quat_tostr, 1),
+        MetatableFunction::new("tostr", QUAT_TOSTR.cfn, QUAT_TOSTR.args),
     ];
     state.table_set_functions(&functions);
     state.pop();
