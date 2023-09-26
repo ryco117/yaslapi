@@ -34,7 +34,9 @@ static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwra
 yaslapi::new_cfn! {
     /// Implement the `__add` metatable method for the `Quaternion` type.
     QUAT_ADD, 2, state {
-        if !(state.is_n_userdata(&TABLE_NAME, 0) && state.is_n_userdata(&TABLE_NAME, 1)) {
+        if !(state.is_userdata(&TABLE_NAME) && state.is_n_userdata(&TABLE_NAME, 1)) {
+            // Pop the arguments from the stack.
+            state.pop(); state.pop();
             return 0;
         }
 
@@ -42,6 +44,8 @@ yaslapi::new_cfn! {
             if let (Some(q), Some(p)) = (state.pop_userdata(), state.peek_userdata()) {
                 (p.as_ptr().cast(), q.as_ptr().cast())
             } else {
+                // Pop the remaining argument from the stack.
+                state.pop();
                 return 0;
             };
 
