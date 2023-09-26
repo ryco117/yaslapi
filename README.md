@@ -32,7 +32,7 @@ fn main() {
 
     // Init new variable `answer` with the top of the stack (in this case, the `42`).
     state.push_int(42);
-    state.init_global("answer");
+    state.init_global_slice("answer");
 
     // Add Rust implemented function `rust_print` to globals.
     state.push_cfunction(rust_print, 0);
@@ -41,7 +41,7 @@ fn main() {
     assert_eq!(state.peek_type(), Type::CFn);
 
     // Init the function as a global.
-    state.init_global("rust_print");
+    state.init_global_slice("rust_print");
 
     // Execute `test.yasl`, now that we're done setting everything up.
     assert!(state.execute().is_ok());

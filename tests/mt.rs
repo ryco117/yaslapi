@@ -28,33 +28,8 @@ use yaslapi_sys::YASL_State;
 
 type Quaternion = cgmath::Quaternion<f64>;
 
+// Use lazy evaluation to get a static CString.
 static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwrap());
-
-// /// Example of a user-defined data type.
-// #[derive(Clone, Copy, Debug)]
-// struct Quaternion {
-//     x: f64,
-//     y: f64,
-//     z: f64,
-//     w: f64,
-// }
-
-// impl Quaternion {
-//     /// Create a new `Quaternion` from the given values.
-//     fn new(x: f64, y: f64, z: f64, w: f64) -> Self {
-//         Self { x, y, z, w }
-//     }
-// }
-
-// /// Rust-defined operations on the `Quaternion` type.
-// impl AddAssign for Quaternion {
-//     fn add_assign(&mut self, rhs: Self) {
-//         self.x += rhs.x;
-//         self.y += rhs.y;
-//         self.z += rhs.z;
-//         self.w += rhs.w;
-//     }
-// }
 
 /// Implement the `__add` metatable method for the `Quaternion` type.
 unsafe extern "C" fn quat_add(state: *mut YASL_State) -> i32 {
@@ -73,7 +48,7 @@ unsafe extern "C" fn quat_add(state: *mut YASL_State) -> i32 {
     // Modify the first quaternion in place.
     *p += *q;
 
-    // Return the number of values pushed to the stack.
+    // Return the number of return values pushed to the stack.
     1
 }
 /// Implement the `tostr` metatable method for the `Quaternion` type.
@@ -104,12 +79,10 @@ fn test_basic_metatable() {
 
     // Register an empty metatable by name and bring it to the top of the stack.
     state.push_table();
+    state.clone_top();
     state.register_mt(&TABLE_NAME);
 
     // Register the metatable functions to the table on the stack.
-    state
-        .load_mt(&TABLE_NAME)
-        .expect("Failed to find the metatable.");
     let functions = [
         MetatableFunction::new("__add", quat_add, 2),
         MetatableFunction::new("tostr", quat_tostr, 1),
@@ -126,7 +99,7 @@ fn test_basic_metatable() {
         .set_mt()
         .expect("Failed to pass correct arguments on stack.");
     state
-        .init_global("p")
+        .init_global_slice("p")
         .expect("Couldn't declare the new global.");
 
     state.push_userdata_box(Quaternion::new(-2., -1., -4., -3.), &TABLE_NAME);
@@ -137,7 +110,7 @@ fn test_basic_metatable() {
         .set_mt()
         .expect("Failed to pass correct arguments on stack.");
     state
-        .init_global("q")
+        .init_global_slice("q")
         .expect("Couldn't declare the new global.");
 
     // Execute the script.

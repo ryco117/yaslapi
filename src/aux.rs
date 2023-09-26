@@ -49,14 +49,32 @@ impl State {
     /// The top of the stack is popped after the global is initialized.
     /// # Errors
     /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
-    /// # Panics
-    /// The string slice `name` must not contain internal zero bytes.
-    pub fn init_global(&mut self, name: &str) -> Result<(), InvalidIdentifier> {
+    pub fn init_global(&mut self, name: &'static CStr) -> Result<(), InvalidIdentifier> {
+        // Ensure that the name is a valid YASL identifier.
+        if !name.to_str().map_or(false, crate::is_valid_identifier) {
+            return Err(InvalidIdentifier);
+        }
+
+        // Initialize the global variable.
+        unsafe {
+            yaslapi_sys::YASLX_initglobal(self.state.as_ptr(), name.as_ptr());
+        }
+
+        Ok(())
+    }
+    /// Declares a global variable with the given name and initializes it with the top of the stack.
+    /// The top of the stack is popped after the global is initialized.
+    /// The string `name` is copied as a new `CString` to a static `HashSet<_>` to provide
+    /// a valid C-string pointer for the lifetime of the program, as YASL requires.
+    /// # Errors
+    /// Will return an `InvalidIdentifier` if the given name is not a valid YASL identifier.
+    pub fn init_global_slice(&mut self, name: &str) -> Result<(), InvalidIdentifier> {
+        // Ensure that the name is a valid YASL identifier.
         if !crate::is_valid_identifier(name) {
             return Err(InvalidIdentifier);
         }
 
-        let var_name = CString::new(name).unwrap();
+        let var_name = CString::new(name).map_err(|_| InvalidIdentifier)?;
         let mut lifetime_strings = LIFETIME_CSTRINGS.lock().unwrap();
 
         // Ensure that if the C-string is already in our map that we use the original pointer.
@@ -116,6 +134,7 @@ impl State {
     /* ********************** */
 
     /// Return the underlying value of a global variable, optionally ensuring a type, or return an error.
+    /// The string `name` is copied to a `CString` before being given to the YASL runtime.
     /// # Errors
     /// Will return a `StateError::Generic` if the given name is not a global variable.
     /// Will return a `StateError::TypeError` if the object is of a different type than what was expected.

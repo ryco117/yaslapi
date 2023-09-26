@@ -45,7 +45,7 @@
 //!
 //!     // Init new variable `answer` with the top of the stack (in this case, the `42`).
 //!     state.push_int(42);
-//!     state.init_global("answer");
+//!     state.init_global_slice("answer");
 //!
 //!     // Add Rust implemented function `rust_print` to globals.
 //!     state.push_cfunction(rust_print, 0);
@@ -54,7 +54,7 @@
 //!     assert_eq!(state.peek_type(), Type::CFn);
 //!
 //!     // Init the function as a global.
-//!     state.init_global("rust_print");
+//!     state.init_global_slice("rust_print");
 //!
 //!     // Execute `test.yasl`, now that we're done setting everything up.
 //!     assert!(state.execute().is_ok());
@@ -505,6 +505,7 @@ impl State {
     }
     /// Loads the specified global from state and pushes it to the stack.
     /// Returns `StateSuccess::Generic` if successful.
+    /// The string `name` is copied to a `CString` before being given to the YASL runtime.
     /// # Errors
     /// If the global does not exist then it will return `StateError::Generic`.
     /// # Panics
@@ -528,6 +529,7 @@ impl State {
     }
     /// Loads a metatable by name. Returns error `StateError::Generic` if the metatable
     /// could not be found, else `StateSuccess::Generic`.
+    /// The string `name` is copied to a `CString` before being given to the YASL runtime.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
     /// # Errors
@@ -607,19 +609,12 @@ impl State {
         }
     }
     /// Returns the type of the top of the stack as a string, or `None` if no string exists.
+    /// Converts the YASL runtime's C-string reference to a string slice.
     /// # Panics
     /// The type name must contain valid UTF-8. This includes the tags of `UserData` objects.
     #[must_use]
     pub fn peek_type_name_slice(&self) -> Option<&'static str> {
-        unsafe {
-            let ptr = yaslapi_sys::YASL_peektypename(self.state.as_ptr());
-            if ptr.is_null() {
-                None
-            } else {
-                Some(CStr::from_ptr(ptr))
-            }
-        }
-        .map(|s| {
+        self.peek_type_name().map(|s| {
             s.to_str()
                 .expect("YASL_peektypename returned invalid UTF-8")
         })
@@ -705,24 +700,13 @@ impl State {
         }
     }
     /// Returns the type name of index `n` from the top of the stack as a string, or `None` if no string exists.
+    /// Converts the YASL runtime's C-string reference to a string slice.
     /// # Panics
     /// The type name must contain valid UTF-8. This includes the tags of `UserData` objects.
     /// The argument count `n` must be able to safely convert into a C unsigned integer.
     #[must_use]
     pub fn peek_n_typename_slice(&self, n: usize) -> Option<&'static str> {
-        unsafe {
-            let ptr = yaslapi_sys::YASL_peekntypename(
-                self.state.as_ptr(),
-                n.try_into()
-                    .expect("Index must be able to safely convert into a C unsigned integer."),
-            );
-            if ptr.is_null() {
-                None
-            } else {
-                Some(CStr::from_ptr(ptr))
-            }
-        }
-        .map(|s| {
+        self.peek_n_typename(n).map(|s| {
             s.to_str()
                 .expect("YASL_peekntypename returned invalid UTF-8")
         })
@@ -889,16 +873,17 @@ impl State {
         unsafe { yaslapi_sys::YASL_pushzstr(self.state.as_ptr(), cstring.as_ptr()) }
     }
 
-    /// Registers a metatable with name `name`. After this the metatable
-    /// can be referred to by `name` in other functions dealing with
-    /// metatables, e.g. `set_mt(..)` and `load_mt(..)`.
+    /// Registers a new metatable with the label `name`. Afterwards, the metatable
+    /// can be referred to by `name` in other functions dealing with metatables.
+    /// E.g., `set_mt(..)` and `load_mt(..)`.
     pub fn register_mt(&mut self, name: &'static CStr) {
         unsafe { yaslapi_sys::YASL_registermt(self.state.as_ptr(), name.as_ptr()) };
     }
-    /// Registers a metatable with name `name`. After this the metatable
-    /// can be referred to by `name` in other functions dealing with
-    /// metatables, e.g. `set_mt(..)` and `load_mt(..)`.
-    /// Adds `name` to the internal map of `CString`s that are kept alive for the lifetime of the program.
+    /// Registers a new metatable with the label `name`. Afterwards, the metatable
+    /// can be referred to by `name` in other functions dealing with metatables.
+    /// E.g., `set_mt(..)` and `load_mt(..)`.
+    /// The string `name` is copied as a new `CString` to a static `HashSet<_>` to provide
+    /// a valid C-string pointer for the lifetime of the program, as YASL requires.
     /// # Panics
     /// The string slice `name` must not contain internal zero bytes.
     pub fn register_mt_slice(&mut self, name: &str) {
@@ -959,6 +944,7 @@ impl State {
         }
     }
     /// Pops the top of the YASL stack and stores it in the given global.
+    /// The string `name` is copied to a `CString` before being given to the YASL runtime.
     /// Returns `StateSuccess::Generic` if successful.
     /// # Errors
     /// If the global does not exist or is `const` then it will return `StateError::Generic`.
