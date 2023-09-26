@@ -45,8 +45,7 @@ macro_rules! new_cfn {
                 let mut $state: State = state.try_into().expect("State is null");
                 $func
             }
-            const $name: YaslCFn = YaslCFn { cfn: [<$name:lower _impl>], args: $args };
-            
+            const $name: yaslapi::aux::YaslCFn = yaslapi::aux::YaslCFn { cfn: [<$name:lower _impl>], args: $args };
         }
     }
 }

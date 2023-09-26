@@ -186,6 +186,17 @@ impl State {
         }
     }
 
+    /// Safely convert from a raw pointer to a YASL `State`, or `None` if given a null pointer.
+    /// A `State` created from a raw pointer **will not** be dropped when it goes out of scope.
+    /// Useful for creating a `State` from within a YASL callback C-function.
+    #[must_use]
+    pub fn from_memory(state: *mut YASL_State) -> Option<Self> {
+        NonNull::new(state).map(|state| Self {
+            state,
+            owns_state: false,
+        })
+    }
+
     /// Compiles the source for the given YASL `State`, but doesn't run it.
     /// Returns `StateSuccess::Generic` if the compilation was successful.
     /// Generally you should use `execute` instead.
@@ -1033,13 +1044,10 @@ impl TryFrom<*mut YASL_State> for State {
     type Error = &'static str;
 
     /// Safely convert from a raw pointer to a YASL `State`.
+    /// A `State` created from a raw pointer **will not** be dropped when it goes out of scope.
+    /// Useful for creating a `State` from within a YASL callback C-function.
     fn try_from(state: *mut YASL_State) -> Result<Self, Self::Error> {
-        NonNull::new(state)
-            .ok_or("Null pointer was passed to State::try_from.")
-            .map(|state| Self {
-                state,
-                owns_state: false,
-            })
+        Self::from_memory(state).ok_or("Null pointer was passed to State::try_from.")
     }
 }
 

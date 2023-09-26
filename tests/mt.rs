@@ -28,10 +28,9 @@ use yaslapi_sys::YASL_State;
 
 type Quaternion = cgmath::Quaternion<f64>;
 
-// Use lazy evaluation to get a static CString.
+// Use lazy evaluation to get a static `CString`.
 static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwrap());
 
-use yaslapi::aux::YaslCFn;
 yaslapi::new_cfn! {
     /// Implement the `__add` metatable method for the `Quaternion` type.
     QUAT_ADD, 2, state {
@@ -53,7 +52,6 @@ yaslapi::new_cfn! {
         1
     }
 }
-
 yaslapi::new_cfn! {
     /// Implement the `tostr` metatable method for the `Quaternion` type.
     QUAT_TOSTR, 1, state {
