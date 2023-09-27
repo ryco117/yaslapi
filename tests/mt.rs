@@ -24,7 +24,6 @@ use std::ffi::CString;
 
 use once_cell::sync::Lazy;
 use yaslapi::{aux::MetatableFunction, State, StateError};
-use yaslapi_sys::YASL_State;
 
 type Quaternion = cgmath::Quaternion<f64>;
 
@@ -33,7 +32,7 @@ static TABLE_NAME: Lazy<CString> = Lazy::new(|| CString::new("quaternion").unwra
 
 yaslapi::new_cfn! {
     /// Implement the `__add` metatable method for the `Quaternion` type.
-    QUAT_ADD, 2, state {
+    QUAT_ADD(state) 2 => {
         if !(state.is_userdata(&TABLE_NAME) && state.is_n_userdata(&TABLE_NAME, 1)) {
             // Pop the arguments from the stack.
             state.pop(); state.pop();
@@ -58,7 +57,7 @@ yaslapi::new_cfn! {
 }
 yaslapi::new_cfn! {
     /// Implement the `tostr` metatable method for the `Quaternion` type.
-    QUAT_TOSTR, 1, state {
+    QUAT_TOSTR(state) 1 => {
         if !state.is_userdata(&TABLE_NAME) {
             state.push_str("Not a quaternion.");
             return StateError::TypeError.into();

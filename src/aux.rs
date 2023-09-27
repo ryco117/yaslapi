@@ -37,12 +37,40 @@ pub struct YaslCFn {
 }
 
 #[macro_export]
+/// A helper macro for defining a function that can act as a callback for the YASL runtime.
+/// The macro will define an `unsafe extern "C" fn` and a `YaslCFn` struct with a reference to it.
+/// # Examples
+/// ```
+/// yaslapi::new_cfn! {
+///     /// Defines a new YASL function which takes `0` inputs and returns `1` value, the integer `42`.
+///     /// Also defines a `const YaslCFn` struct with a reference to the function and the argument
+///     /// count we gave it, `0`.
+///     PRINT_HELLO_GET_42(state) 0 => {
+///         println!("Hello, world!");
+///         state.push_int(42);
+///         1
+///     }
+/// }
+/// assert_eq!(PRINT_HELLO_GET_42.args, 0);
+/// ```
 macro_rules! new_cfn {
-    ($(#[$attr:meta])* $name:ident, $args:expr, $state:ident $func:expr) => {
+    // Primary variant for functions to use.
+    ($(#[$attr:meta])* $name:ident($state:ident) $args:expr => $func:expr) => {
         $(#[$attr])*
         paste::paste! {
-            unsafe extern "C" fn [<$name:lower _impl>](state: *mut YASL_State) -> i32 {
-                let mut $state: State = state.try_into().expect("State is null");
+            unsafe extern "C" fn [<$name:lower _impl>](state: *mut yaslapi_sys::YASL_State) -> i32 {
+                let mut $state: yaslapi::State = state.try_into().expect("State is null");
+                $func
+            }
+            const $name: yaslapi::aux::YaslCFn = yaslapi::aux::YaslCFn { cfn: [<$name:lower _impl>], args: $args };
+        }
+    };
+
+    // This variant is used for functions which don't need to access the state.
+    ($(#[$attr:meta])* $name:ident(_) $args:expr => $func:expr) => {
+        $(#[$attr])*
+        paste::paste! {
+            unsafe extern "C" fn [<$name:lower _impl>](_: *mut yaslapi_sys::YASL_State) -> i32 {
                 $func
             }
             const $name: yaslapi::aux::YaslCFn = yaslapi::aux::YaslCFn { cfn: [<$name:lower _impl>], args: $args };
